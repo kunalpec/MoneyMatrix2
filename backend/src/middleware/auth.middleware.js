@@ -19,7 +19,6 @@ export const verifyJWT = AsyncHandler(async (req, res, next) => {
         accessTokenFromCookieHeader ||
         (authHeader?.startsWith("Bearer ") ? authHeader.split(" ")[1] : null);
 
-    console.log("Extracted Token:", token); 
     if (!token) {
         throw new ApiError(401, "Unauthorized");
     }

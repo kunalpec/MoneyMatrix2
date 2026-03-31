@@ -1,9 +1,9 @@
 import mongoose from "mongoose";
-import { Wallet } from "../../model/wallet.model.js";
-import { Bet } from "../../model/bet.model.js";
-import { AsyncHandler } from "../../util/AsyncHandler.util.js";
-import { ApiError } from "../../util/ApiError.util.js";
-import { ApiResponse } from "../../util/ApiResponse.util.js";
+import { Wallet } from "../model/wallet.model.js";
+import { Bet } from "../model/bet.model.js";
+import { AsyncHandler } from "../util/AsyncHandler.util.js";
+import { ApiError } from "../util/ApiError.util.js";
+import { ApiResponse } from "../util/ApiResponse.util.js";
 
 export const walletInfo = AsyncHandler(async (req, res) => {
     // req.user is attached by verifyJWT middleware. No need to query User again.

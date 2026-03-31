@@ -24,6 +24,23 @@ const cookieOptions = {
     secure: process.env.NODE_ENV === "production"
 };
 
+const resolveSignupRole = (requestedRole, adminKey) => {
+    if (requestedRole !== "admin") {
+        return "user";
+    }
+
+    const expectedAdminKey = String(process.env.ADMIN_SIGNUP_KEY || "").trim();
+    if (!expectedAdminKey) {
+        throw new ApiError(403, "Admin signup is disabled");
+    }
+
+    if (String(adminKey || "").trim() !== expectedAdminKey) {
+        throw new ApiError(403, "Invalid admin signup key");
+    }
+
+    return "admin";
+};
+
 /* =========================
    SIGNUP
 ========================= */
@@ -32,10 +49,14 @@ export const userSignup = AsyncHandler(async (req, res) => {
     const email = String(req.body.email || "").trim().toLowerCase();
     const password = String(req.body.password || "");
     const phone = String(req.body.phone || "").trim();
+    const requestedRole = String(req.body.role || "user").trim().toLowerCase();
+    const adminKey = String(req.body.adminKey || "").trim();
 
     if (!name || !email || !phone || !password) {
         throw new ApiError(400, "All fields required");
     }
+
+    const role = resolveSignupRole(requestedRole, adminKey);
 
     let user = await User.findOne({ $or: [{ email }, { phone }] });
 
@@ -48,12 +69,13 @@ export const userSignup = AsyncHandler(async (req, res) => {
     const hashedOtp = await bcrypt.hash(otp, 10);
 
     if (!user) {
-        user = new User({ name, email, phone, password });
+        user = new User({ name, email, phone, password, role });
     } else {
         user.name = name;
         user.email = email;
         user.phone = phone;
         user.password = password;
+        user.role = role;
     }
 
     user.otp = hashedOtp;
@@ -257,7 +279,7 @@ export const userResetPassword = AsyncHandler(async (req, res) => {
     const isOtpValid = await bcrypt.compare(otp, user.otp || "");
     if (!isOtpValid || user.otpExpires < Date.now()) {
         throw new ApiError(400, "Invalid or expired OTP");
-    }``
+    }
 
     user.password = user.newpassword; // Pre-save hook will hash this
     user.otp = null;
