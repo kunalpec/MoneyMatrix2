@@ -29,6 +29,7 @@ const gameRoundSchema = new mongoose.Schema(
     result: {
       type: String,
       enum: ["red", "blue", "violet"],
+      default: undefined,
     },
 
     isResultDeclared: {
@@ -80,7 +81,6 @@ gameRoundSchema.methods.setResult = function () {
   // ✅ If admin already set result → use it
   if (this.isManualResult && this.result) {
     this.isResultDeclared = true;
-    this.status = "ended";
     return;
   }
 

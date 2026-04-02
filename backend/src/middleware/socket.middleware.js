@@ -8,7 +8,7 @@ export const socketAuthMiddleware = async (socket, next) => {
     const token =
       socket.handshake.auth?.token ||
       socket.handshake.headers?.authorization?.split(" ")[1];
-
+    console.log("Socket Auth Token:", token); // Debug log
     if (!token) {
       return next(new ApiError(401, "Token missing"));
     }
@@ -30,6 +30,7 @@ export const socketAuthMiddleware = async (socket, next) => {
 
     // 💾 attach user
     socket.user = user;
+    console.log("Socket User:", user); // Debug log
 
     next(); // ✅ success
   } catch (error) {

@@ -50,7 +50,9 @@
 .sidebar,
 .topbar,
 .stat-card,
-.leaderboard-card {
+.leaderboard-card,
+.hero-panel,
+.settings-hero {
   border: 1px solid rgba(255, 255, 255, 0.09);
   background: rgba(8, 16, 30, 0.72);
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.24);
@@ -86,7 +88,15 @@
 .stat-card p,
 .profile-chip span,
 .section-head p,
-.eyebrow {
+.eyebrow,
+.topbar-date,
+.hero-aside span,
+.settings-hero-meta span,
+.result-preview span,
+.signal-card span,
+.legend-card span,
+.status-tile span,
+.pulse-label span {
   color: rgba(229, 233, 239, 0.7);
 }
 
@@ -127,7 +137,8 @@
 }
 
 .primary-button:hover,
-.secondary-button:hover {
+.secondary-button:hover,
+.preset-chip:hover {
   transform: translateY(-1px);
 }
 
@@ -155,7 +166,9 @@
 }
 
 .split-links,
-.button-row {
+.button-row,
+.duration-presets,
+.totals-strip {
   display: flex;
   flex-wrap: wrap;
   gap: 0.8rem;
@@ -194,7 +207,15 @@
 .detail-grid strong,
 .leaderboard-card strong,
 .profile-chip strong,
-.list-row strong {
+.list-row strong,
+.hero-copy h2,
+.settings-hero h2,
+.hero-aside strong,
+.settings-hero-meta strong,
+.result-preview strong,
+.signal-card strong,
+.status-tile strong,
+.pulse-label strong {
   color: #fbfdff;
 }
 
@@ -235,6 +256,11 @@
   gap: 1rem;
 }
 
+.topbar-copy {
+  display: grid;
+  gap: 0.25rem;
+}
+
 .topbar-meta {
   display: flex;
   align-items: center;
@@ -257,9 +283,50 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.hero-panel,
+.settings-hero {
+  border-radius: 30px;
+  padding: 1.6rem;
+  background:
+    radial-gradient(circle at top left, rgba(29, 199, 255, 0.14), transparent 32%),
+    radial-gradient(circle at bottom right, rgba(255, 209, 102, 0.12), transparent 28%),
+    rgba(8, 16, 30, 0.76);
+}
+
+.hero-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(280px, 0.8fr);
+  gap: 1rem;
+}
+
+.hero-copy p:not(.eyebrow),
+.settings-hero p:not(.eyebrow) {
+  margin: 0;
+  max-width: 42rem;
+  color: rgba(235, 240, 245, 0.72);
+}
+
+.hero-aside,
+.settings-hero-meta {
+  display: grid;
+  gap: 0.8rem;
+  align-content: start;
+}
+
+.hero-aside div,
+.settings-hero-meta div {
+  border-radius: 20px;
+  padding: 1rem 1.05rem;
+  background: rgba(255, 255, 255, 0.05);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 1rem;
 }
 
@@ -268,10 +335,36 @@
   padding: 1.35rem;
   display: grid;
   gap: 0.55rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.stat-card::after {
+  content: "";
+  position: absolute;
+  inset: auto -2rem -2rem auto;
+  width: 7rem;
+  height: 7rem;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.18), transparent 70%);
 }
 
 .stat-card strong {
   font-size: clamp(1.5rem, 2vw, 2.4rem);
+}
+
+.stat-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.stat-orb {
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: 0 0 16px rgba(255, 255, 255, 0.45);
 }
 
 .stat-card.cyan {
@@ -290,6 +383,13 @@
   background: linear-gradient(180deg, rgba(174, 134, 255, 0.18), rgba(8, 16, 30, 0.8));
 }
 
+.analytics-grid,
+.insight-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.2rem;
+}
+
 .section-card {
   border-radius: 28px;
   padding: 1.4rem;
@@ -303,10 +403,159 @@
   margin-bottom: 1rem;
 }
 
-.totals-strip {
-  display: flex;
-  flex-wrap: wrap;
+.distribution-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  gap: 1.4rem;
+  align-items: center;
+}
+
+.donut-wrap,
+.pulse-meter {
+  display: grid;
+  place-items: center;
+}
+
+.donut-chart {
+  width: min(240px, 100%);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  padding: 1.2rem;
+  display: grid;
+  place-items: center;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.donut-core {
+  width: 66%;
+  height: 66%;
+  border-radius: 50%;
+  background: rgba(7, 17, 31, 0.94);
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 1rem;
+}
+
+.chart-legend,
+.pulse-details,
+.list-stack,
+.sidebar-nav {
+  display: grid;
   gap: 0.8rem;
+}
+
+.legend-card,
+.signal-card,
+.status-tile {
+  border-radius: 20px;
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.signal-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.signal-card strong {
+  max-width: 60%;
+  text-align: right;
+  line-break: anywhere;
+  overflow-wrap: anywhere;
+}
+
+.legend-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-bottom: 0.75rem;
+}
+
+.legend-meta strong {
+  margin-right: auto;
+}
+
+.legend-dot {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 999px;
+}
+
+.legend-dot.red,
+.legend-bar-fill.red,
+.result-swatch.red {
+  background: linear-gradient(135deg, #ff7a7a, #ff4c65);
+}
+
+.legend-dot.blue,
+.legend-bar-fill.blue,
+.result-swatch.blue {
+  background: linear-gradient(135deg, #49b6ff, #2276ff);
+}
+
+.legend-dot.violet,
+.legend-bar-fill.violet,
+.result-swatch.violet {
+  background: linear-gradient(135deg, #bc8cff, #8c4dff);
+}
+
+.legend-bar-track {
+  height: 0.75rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+  margin-bottom: 0.65rem;
+}
+
+.legend-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+}
+
+.pulse-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+  gap: 1.2rem;
+  align-items: center;
+}
+
+.pulse-ring {
+  position: relative;
+  width: 220px;
+  height: 220px;
+}
+
+.pulse-svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.pulse-track,
+.pulse-progress {
+  fill: none;
+  stroke-width: 8;
+}
+
+.pulse-track {
+  stroke: rgba(255, 255, 255, 0.08);
+}
+
+.pulse-progress {
+  stroke: #18d2a2;
+  stroke-linecap: round;
+}
+
+.pulse-label {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  text-align: center;
 }
 
 .total-pill {
@@ -338,9 +587,21 @@
   gap: 0.35rem;
 }
 
-.list-stack {
+.timeline-strip {
+  margin-top: 1.2rem;
   display: grid;
+  grid-template-columns: repeat(3, 1fr);
   gap: 0.8rem;
+}
+
+.timeline-node {
+  height: 0.55rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.timeline-node.active {
+  background: linear-gradient(135deg, #14d2a3, #1dc7ff);
 }
 
 .list-row,
@@ -354,10 +615,73 @@
   background: rgba(255, 255, 255, 0.04);
 }
 
+.list-row.premium,
+.notice-row.premium {
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
+}
+
 .notice-row.muted,
 .screen-state,
 .empty-cell {
   color: rgba(235, 240, 245, 0.66);
+}
+
+.notice-marker {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #14d2a3, #1dc7ff);
+  box-shadow: 0 0 14px rgba(29, 199, 255, 0.35);
+  flex-shrink: 0;
+}
+
+.notice-row.premium span:last-child {
+  flex: 1;
+}
+
+.control-panel {
+  display: grid;
+  gap: 1rem;
+}
+
+.result-preview {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  border-radius: 22px;
+  padding: 1rem 1.1rem;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+}
+
+.result-swatch {
+  width: 3rem;
+  height: 3rem;
+  border-radius: 18px;
+  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.24);
+}
+
+.preset-chip {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  padding: 0.7rem 0.95rem;
+  background: rgba(255, 255, 255, 0.04);
+  color: #f8fbff;
+  cursor: pointer;
+  transition: background 180ms ease, transform 180ms ease, border-color 180ms ease;
+}
+
+.preset-chip.active {
+  background: rgba(20, 210, 163, 0.14);
+  border-color: rgba(20, 210, 163, 0.35);
+}
+
+.settings-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.status-tile.full-width {
+  grid-column: 1 / -1;
 }
 
 .status-badge {
@@ -451,7 +775,13 @@
   .admin-shell,
   .page-grid.two-column,
   .stats-grid,
-  .detail-grid {
+  .detail-grid,
+  .analytics-grid,
+  .insight-grid,
+  .hero-panel,
+  .distribution-layout,
+  .pulse-panel,
+  .settings-grid {
     grid-template-columns: 1fr;
   }
 
@@ -466,5 +796,10 @@
 
   .sidebar {
     margin: 1rem;
+  }
+
+  .pulse-ring {
+    width: 180px;
+    height: 180px;
   }
 }

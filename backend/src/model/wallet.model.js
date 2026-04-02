@@ -79,9 +79,16 @@ walletSchema.methods.lockAmount = function (amount) {
 
 
 // 🔓 Unlock + settle win
-walletSchema.methods.settleWin = function (betAmount, winAmount) {
+walletSchema.methods.settleWin = function (betAmount, winAmount,io,userSocket) {
   this.lockedBalance -= betAmount;
   this.balance += winAmount;
+  // Optional: Emit real-time update to user about wallet change
+  if (io && userSocket) {
+    io.to(userSocket).emit("wallet-update", {
+      balance: this.balance,
+      lockedBalance: this.lockedBalance,
+    });
+  }
 };
 
 

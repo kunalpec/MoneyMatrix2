@@ -72,6 +72,7 @@ const StartIoServer = (server) => {
                 await gameEngine.leaveGame(user);
                 console.log(`User ${user.name} (${userId}) disconnected`);
             });
+
         });
 
     } catch (error) {

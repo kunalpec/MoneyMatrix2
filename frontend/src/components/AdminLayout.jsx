@@ -41,20 +41,26 @@ export default function AdminLayout() {
     const onDisconnect = () => dispatch(setSocketStatus("disconnected"));
     const onCurrentRound = (payload) => dispatch(syncCurrentRound(payload));
     const onNewRound = (payload) => {
+      dispatch(setSocketError(""));
       dispatch(syncCurrentRound(payload));
       dispatch(addAdminNotice("A new round has started"));
     };
     const onRoundEnded = (payload) => {
+      dispatch(setSocketError(""));
       dispatch(syncCurrentRound(payload));
       dispatch(addAdminNotice(`Round result: ${payload?.result || "pending"}`));
     };
     const onAdminBetUpdate = (payload) => dispatch(applyAdminBetUpdate(payload));
     const onPlayerCount = (payload) => dispatch(setPlayerCount(payload));
     const onTimer = (payload) => dispatch(setRoundTimer(payload));
-    const onAdminSetResult = (payload) =>
-      dispatch(addAdminNotice(`Manual result set to ${payload?.result || "unknown"}`));
+    const onAdminSetResult = (payload) => {
+      dispatch(setSocketError(""));
+      dispatch(syncCurrentRound(payload?.currentRound || payload));
+      dispatch(addAdminNotice(`Manual result queued: ${payload?.result || "unknown"}`));
+    };
     const onDurationChange = (payload) => {
-      dispatch(syncCurrentRound({ endTime: payload?.newEndTime }));
+      dispatch(setSocketError(""));
+      dispatch(syncCurrentRound(payload?.currentRound || { endTime: payload?.newEndTime }));
       dispatch(addAdminNotice("Round duration updated"));
     };
     const onSocketError = (payload) =>

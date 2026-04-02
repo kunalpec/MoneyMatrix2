@@ -4,6 +4,11 @@ import StatusBadge from "./StatusBadge";
 export default function Topbar() {
   const user = useAppSelector((state) => state.auth.user);
   const socketStatus = useAppSelector((state) => state.admin.socketStatus);
+  const formattedToday = new Intl.DateTimeFormat("en-IN", {
+    weekday: "long",
+    day: "numeric",
+    month: "short",
+  }).format(new Date());
 
   const tone =
     socketStatus === "connected"
@@ -14,9 +19,10 @@ export default function Topbar() {
 
   return (
     <header className="topbar">
-      <div>
+      <div className="topbar-copy">
         <p className="eyebrow">Control Room</p>
         <h1>Admin overview</h1>
+        <span className="topbar-date">{formattedToday}</span>
       </div>
 
       <div className="topbar-meta">

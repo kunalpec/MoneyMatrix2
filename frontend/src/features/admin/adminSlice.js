@@ -80,6 +80,9 @@ const adminSlice = createSlice({
           ...state.currentRound,
           ...round,
         };
+        if (state.currentRound.status === "running" && !state.currentRound.isManualResult) {
+          state.currentRound.result = undefined;
+        }
         state.liveTotals = getLiveTotalsFromRound(state.currentRound);
       }
 
@@ -87,7 +90,7 @@ const adminSlice = createSlice({
         state.currentRound.status = action.payload.status;
       }
 
-      if (action.payload?.result && state.currentRound) {
+      if ("result" in (action.payload || {}) && state.currentRound) {
         state.currentRound.result = action.payload.result;
       }
 
