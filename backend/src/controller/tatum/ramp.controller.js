@@ -1,7 +1,7 @@
 // controllers/onramp.controller.js
 import crypto from "crypto";
+import axios from "axios";
 import { Wallet } from "../../model/wallet.model.js";
-import { User } from "../../model/user.model.js";
 import { AsyncHandler } from "../../util/AsyncHandler.util.js";
 import { ApiError } from "../../util/ApiError.util.js";
 import { ApiResponse } from "../../util/ApiResponse.util.js";
@@ -9,8 +9,116 @@ import { tatumClient } from "./client.controller.js";
 import { decrypt, derivePrivateKeyFromMnemonic } from "../../util/EncryptDecrypt.util.js";
 import { Transaction } from "../../model/transaction.model.js";
 
+let transakPartnerAccessToken = process.env.TRANSAK_ACCESS_TOKEN || "";
+let transakPartnerAccessTokenExpiresAt = 0;
 
-// real money ---> crypto 
+const getTransakEnvironmentConfig = () => {
+  const isDev = process.env.NODE_ENV === "development";
+  const hostUrl = process.env.TRANSAK_HOST_URL?.trim() || (
+    isDev
+      ? "https://delphia-synostotic-fletcher.ngrok-free.dev"
+      : "https://moneymatrixapp.com"
+  );
+  const referrerDomain = process.env.TRANSAK_REFERRER_DOMAIN?.trim() || new URL(hostUrl).host;
+
+  return {
+    hostUrl,
+    referrerDomain,
+    sessionApiUrl: isDev
+      ? "https://api-gateway-stg.transak.com/api/v2/auth/session"
+      : "https://api-gateway.transak.com/api/v2/auth/session",
+    refreshTokenApiUrl: isDev
+      ? "https://api-stg.transak.com/partners/api/v2/refresh-token"
+      : "https://api.transak.com/partners/api/v2/refresh-token",
+  };
+};
+
+const getPartnerAccessToken = async () => {
+  const now = Date.now();
+
+  if (transakPartnerAccessToken && transakPartnerAccessTokenExpiresAt > now + 60_000) {
+    return transakPartnerAccessToken;
+  }
+
+  if (process.env.TRANSAK_ACCESS_TOKEN) {
+    transakPartnerAccessToken = process.env.TRANSAK_ACCESS_TOKEN;
+    transakPartnerAccessTokenExpiresAt = now + 6 * 24 * 60 * 60 * 1000;
+    return transakPartnerAccessToken;
+  }
+
+  if (!process.env.TRANSAK_API_SECRET) {
+    throw new ApiError(
+      500,
+      "Transak is not configured. Set TRANSAK_ACCESS_TOKEN or TRANSAK_API_SECRET in backend/.env"
+    );
+  }
+
+  const { refreshTokenApiUrl } = getTransakEnvironmentConfig();
+
+  try {
+    const { data } = await axios.post(
+      refreshTokenApiUrl,
+      { apiKey: process.env.TRANSAK_API_KEY },
+      {
+        headers: {
+          "api-secret": process.env.TRANSAK_API_SECRET,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    transakPartnerAccessToken = data?.data?.accessToken;
+    transakPartnerAccessTokenExpiresAt = (data?.data?.expiresAt || 0) * 1000;
+
+    if (!transakPartnerAccessToken) {
+      throw new Error("Missing access token in Transak response");
+    }
+
+    return transakPartnerAccessToken;
+  } catch (error) {
+    throw new ApiError(
+      error?.response?.status || 502,
+      error?.response?.data?.message || "Failed to fetch Transak partner access token"
+    );
+  }
+};
+
+const createTransakWidgetUrl = async (widgetParams) => {
+  if (!process.env.TRANSAK_API_KEY) {
+    throw new ApiError(500, "TRANSAK_API_KEY is missing in backend/.env");
+  }
+
+  const accessToken = await getPartnerAccessToken();
+  const { sessionApiUrl } = getTransakEnvironmentConfig();
+
+  try {
+    const { data } = await axios.post(
+      sessionApiUrl,
+      { widgetParams },
+      {
+        headers: {
+          "access-token": accessToken,
+          "Content-Type": "application/json",
+          accept: "application/json",
+        },
+      }
+    );
+
+    const widgetUrl = data?.data?.widgetUrl;
+    if (!widgetUrl) {
+      throw new Error("Missing widgetUrl in Transak response");
+    }
+
+    return widgetUrl;
+  } catch (error) {
+    throw new ApiError(
+      error?.response?.status || 502,
+      error?.response?.data?.message || "Failed to create Transak widget URL"
+    );
+  }
+};
+
+// real money ---> crypto
 export const createOnRampUrl = AsyncHandler(async (req, res) => {
   const user = req.user;
 
@@ -18,50 +126,30 @@ export const createOnRampUrl = AsyncHandler(async (req, res) => {
     throw new ApiError(400, "Tron address not found");
   }
 
-  const isDev = process.env.NODE_ENV === "development";
-
-  const baseUrl = isDev
-    ? "https://delphia-synostotic-fletcher.ngrok-free.dev"
-    : "https://moneymatrixapp.com";
-
-  const transakUrl = isDev
-    ? "https://global-stg.transak.com"
-    : "https://global.transak.com";
-
-  const params = new URLSearchParams({
+  const { hostUrl, referrerDomain } = getTransakEnvironmentConfig();
+  const widgetParams = {
     apiKey: process.env.TRANSAK_API_KEY,
-    environment: isDev ? "STAGING" : "PRODUCTION",
-
-    // 🔑 important additions
-    products: "BUY",
+    productsAvailed: "BUY",
     partnerCustomerId: user._id.toString(),
-
-    defaultCryptoCurrency: "TRX",
+    cryptoCurrencyCode: "TRX",
+    network: "mainnet",
     walletAddress: user.tronAddress,
-    disableWalletAddressForm: "true",
-
+    disableWalletAddressForm: true,
     fiatCurrency: "INR",
-    defaultFiatAmount: "1000",
+    fiatAmount: 1000,
+    hostURL: hostUrl,
+    redirectURL: `${hostUrl}/transak/success`,
+    referrerDomain,
+  };
 
-    hostURL: baseUrl,
-    redirectURL: `${baseUrl}/transak/success`,
-    referrerDomain: isDev
-      ? "delphia-synostotic-fletcher.ngrok-free.dev"
-      : "moneymatrixapp.com",
-  });
+  const url = await createTransakWidgetUrl(widgetParams);
 
   return res.status(200).json(
-    new ApiResponse(
-      200,
-      { url: `${transakUrl}?${params.toString()}` },
-      "On-ramp URL generated successfully"
-    )
+    new ApiResponse(200, { url }, "On-ramp URL generated successfully")
   );
 });
 
-
 // user wallet ---> admin wallet
-
 export const sweepToAdminWallet = async (req, res, next) => {
   let sweepTx;
 
@@ -110,7 +198,6 @@ export const sweepToAdminWallet = async (req, res, next) => {
       privateKey,
     });
 
-    // atomic update
     await Wallet.findOneAndUpdate(
       { isAdmin: true },
       { $inc: { balance: sweepAmount } }
@@ -121,7 +208,6 @@ export const sweepToAdminWallet = async (req, res, next) => {
     await sweepTx.save();
 
     return { success: true };
-
   } catch (err) {
     if (sweepTx) {
       sweepTx.status = "FAILED";
@@ -133,9 +219,7 @@ export const sweepToAdminWallet = async (req, res, next) => {
   }
 };
 
-
-// admin wallet -----> user wallet only 
-
+// admin wallet -----> user wallet only
 export const withdrawTrx = AsyncHandler(async (req, res) => {
   const { amount, toAddress } = req.body;
   const user = req.user;
@@ -159,7 +243,6 @@ export const withdrawTrx = AsyncHandler(async (req, res) => {
   const mnemonic = decrypt(adminWallet.mnemonic);
   const privateKey = derivePrivateKeyFromMnemonic(mnemonic);
 
-  // 🔴 deduct user
   if (user.role !== "admin") {
     const updated = await Wallet.findOneAndUpdate(
       { user: user._id, balance: { $gte: amount } },
@@ -186,19 +269,17 @@ export const withdrawTrx = AsyncHandler(async (req, res) => {
       privateKey,
     });
 
-    // deduct admin atomically
     await Wallet.findOneAndUpdate(
       { isAdmin: true, balance: { $gte: amount } },
       { $inc: { balance: -amount } }
     );
 
     tx.txId = response.data.txId;
-    await tx.save(); // keep PENDING
+    await tx.save();
 
     return res.status(200).json(
       new ApiResponse(200, { txId: tx.txId }, "Withdraw initiated")
     );
-
   } catch (err) {
     if (user.role !== "admin") {
       await Wallet.updateOne(
@@ -227,18 +308,8 @@ export const createOffRampUrl = AsyncHandler(async (req, res) => {
     throw new ApiError(400, "User wallet address missing");
   }
 
-  // 🟢 Environment handling
-  const isDev = process.env.NODE_ENV === "development";
+  const { hostUrl, referrerDomain } = getTransakEnvironmentConfig();
 
-  const baseUrl = isDev
-    ? "https://delphia-synostotic-fletcher.ngrok-free.dev"
-    : "https://moneymatrixapp.com";
-
-  const transakUrl = isDev
-    ? "https://global-stg.transak.com"
-    : "https://global.transak.com";
-
-  // 🟢 STEP 1: Deduct user balance (atomic)
   const wallet = await Wallet.findOneAndUpdate(
     { user: user._id, balance: { $gte: amount } },
     { $inc: { balance: -amount } },
@@ -249,7 +320,6 @@ export const createOffRampUrl = AsyncHandler(async (req, res) => {
     throw new ApiError(400, "Insufficient balance");
   }
 
-  // 🟢 STEP 2: Create internal transaction
   const tx = await Transaction.create({
     userId: user._id,
     type: "WITHDRAW",
@@ -258,40 +328,45 @@ export const createOffRampUrl = AsyncHandler(async (req, res) => {
     externalId: crypto.randomUUID(),
   });
 
-  // 🟢 STEP 3: Build Transak SELL URL
-  const params = new URLSearchParams({
-    apiKey: process.env.TRANSAK_API_KEY,
-    environment: isDev ? "STAGING" : "PRODUCTION",
+  try {
+    const widgetParams = {
+      apiKey: process.env.TRANSAK_API_KEY,
+      productsAvailed: "SELL",
+      partnerCustomerId: user._id.toString(),
+      partnerOrderId: tx.externalId,
+      cryptoCurrencyCode: "TRX",
+      network: "mainnet",
+      walletAddress: user.tronAddress,
+      disableWalletAddressForm: true,
+      cryptoAmount: amount.toString(),
+      fiatCurrency: "INR",
+      hostURL: hostUrl,
+      redirectURL: `${hostUrl}/transak/offramp-success`,
+      referrerDomain,
+      walletRedirection: true,
+    };
 
-    // 🔥 IMPORTANT
-    products: "AUTO_SELL",
-    partnerCustomerId: user._id.toString(),
+    const url = await createTransakWidgetUrl(widgetParams);
 
-    defaultCryptoCurrency: "TRX",
-    walletAddress: user.tronAddress,
-    disableWalletAddressForm: "true",
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          url,
+          transactionId: tx._id,
+        },
+        "Off-ramp URL generated"
+      )
+    );
+  } catch (error) {
+    await Wallet.updateOne(
+      { user: user._id },
+      { $inc: { balance: amount } }
+    );
 
-    cryptoAmount: amount.toString(),
-    fiatCurrency: "INR",
+    tx.status = "FAILED";
+    await tx.save();
 
-    // 🔗 tracking & redirect
-    hostURL: baseUrl,
-    redirectURL: `${baseUrl}/transak/offramp-success`,
-
-    // 🧠 VERY IMPORTANT FOR TRACKING
-    partnerOrderId: tx.externalId,
-  });
-
-  const url = `${transakUrl}?${params.toString()}`;
-
-  return res.status(200).json(
-    new ApiResponse(
-      200,
-      {
-        url,
-        transactionId: tx._id,
-      },
-      "Off-ramp URL generated"
-    )
-  );
+    throw error;
+  }
 });

@@ -22,6 +22,7 @@ import webhookRouter from "./routes/webhook.route.js";
 import walletRouter from "./routes/wallet.route.js";
 import userRouter from "./routes/user.route.js";
 import adminRouter from "./routes/admin.route.js";
+import transakRouter from "./routes/transak.route.js";
 
 app.get("/health",(req,res)=>{
     res.json({
@@ -36,6 +37,8 @@ app.use("/api/v1/admin", adminRouter);     // endpoints: /api/v1/admin/users, /a
 app.use("/api/v1/wallet", walletRouter);   // endpoints: /api/v1/wallet
 app.use("/api/v1/ramp", rampRouter);       // endpoints: /api/v1/ramp/on-ramp, /api/v1/ramp/off-ramp, /api/v1/ramp/withdraw
 app.use("/api/v1/webhook", webhookRouter); // endpoints: /api/v1/webhook/tatum/deposit, /api/v1/webhook/transak, etc.
+app.use("/api/v1/transak", transakRouter);
 
+// Error Handler
 import { errorHandler } from "./middleware/error.middleware.js";
 app.use(errorHandler);

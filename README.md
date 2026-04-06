@@ -98,7 +98,11 @@ TATUM_API_KEY_KUNAL=your_tatum_api_key
 TATUM_WEBHOOK_SECRET=your_tatum_webhook_secret
 
 TRANSAK_API_KEY=your_transak_api_key
+TRANSAK_API_SECRET=your_transak_api_secret
+TRANSAK_ACCESS_TOKEN=
 TRANSAK_WEBHOOK_SECRET=your_transak_webhook_secret
+TRANSAK_HOST_URL=https://your-public-app-domain.com
+TRANSAK_REFERRER_DOMAIN=your-public-app-domain.com
 
 TWILIO_ACCOUNT_SID=your_twilio_sid
 TWILIO_AUTH_TOKEN=your_twilio_auth_token
