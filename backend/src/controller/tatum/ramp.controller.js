@@ -1,4 +1,3 @@
-// controllers/onramp.controller.js
 import crypto from "crypto";
 import axios from "axios";
 import { Wallet } from "../../model/wallet.model.js";
@@ -6,199 +5,157 @@ import { AsyncHandler } from "../../util/AsyncHandler.util.js";
 import { ApiError } from "../../util/ApiError.util.js";
 import { ApiResponse } from "../../util/ApiResponse.util.js";
 import { tatumClient } from "./client.controller.js";
+import { generateTransakAccessToken } from "./transak.controller.js";
 import { decrypt, derivePrivateKeyFromMnemonic } from "../../util/EncryptDecrypt.util.js";
 import { Transaction } from "../../model/transaction.model.js";
 
-let transakPartnerAccessToken = process.env.TRANSAK_ACCESS_TOKEN || "";
-let transakPartnerAccessTokenExpiresAt = 0;
 
+// ================= ENV CONFIG =================
 const getTransakEnvironmentConfig = () => {
   const isDev = process.env.NODE_ENV === "development";
-  const hostUrl = process.env.TRANSAK_HOST_URL?.trim() || (
-    isDev
-      ? "https://delphia-synostotic-fletcher.ngrok-free.dev"
-      : "https://moneymatrixapp.com"
-  );
-  const referrerDomain = process.env.TRANSAK_REFERRER_DOMAIN?.trim() || new URL(hostUrl).host;
+
+  const hostUrl =
+    process.env.TRANSAK_HOST_URL ||
+    (isDev
+      ? "https://your-ngrok-url.ngrok-free.app"
+      : "https://yourdomain.com");
 
   return {
     hostUrl,
-    referrerDomain,
+    referrerDomain: new URL(hostUrl).host,
     sessionApiUrl: isDev
       ? "https://api-gateway-stg.transak.com/api/v2/auth/session"
       : "https://api-gateway.transak.com/api/v2/auth/session",
-    refreshTokenApiUrl: isDev
-      ? "https://api-stg.transak.com/partners/api/v2/refresh-token"
-      : "https://api.transak.com/partners/api/v2/refresh-token",
   };
 };
 
-const getPartnerAccessToken = async () => {
-  const now = Date.now();
 
-  if (transakPartnerAccessToken && transakPartnerAccessTokenExpiresAt > now + 60_000) {
-    return transakPartnerAccessToken;
-  }
-
-  if (process.env.TRANSAK_ACCESS_TOKEN) {
-    transakPartnerAccessToken = process.env.TRANSAK_ACCESS_TOKEN;
-    transakPartnerAccessTokenExpiresAt = now + 6 * 24 * 60 * 60 * 1000;
-    return transakPartnerAccessToken;
-  }
-
-  if (!process.env.TRANSAK_API_SECRET) {
-    throw new ApiError(
-      500,
-      "Transak is not configured. Set TRANSAK_ACCESS_TOKEN or TRANSAK_API_SECRET in backend/.env"
-    );
-  }
-
-  const { refreshTokenApiUrl } = getTransakEnvironmentConfig();
-
-  try {
-    const { data } = await axios.post(
-      refreshTokenApiUrl,
-      { apiKey: process.env.TRANSAK_API_KEY },
-      {
-        headers: {
-          "api-secret": process.env.TRANSAK_API_SECRET,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
-    transakPartnerAccessToken = data?.data?.accessToken;
-    transakPartnerAccessTokenExpiresAt = (data?.data?.expiresAt || 0) * 1000;
-
-    if (!transakPartnerAccessToken) {
-      throw new Error("Missing access token in Transak response");
-    }
-
-    return transakPartnerAccessToken;
-  } catch (error) {
-    throw new ApiError(
-      error?.response?.status || 502,
-      error?.response?.data?.message || "Failed to fetch Transak partner access token"
-    );
-  }
-};
-
+// ================= CREATE TRANSAK URL =================
 const createTransakWidgetUrl = async (widgetParams) => {
-  if (!process.env.TRANSAK_API_KEY) {
-    throw new ApiError(500, "TRANSAK_API_KEY is missing in backend/.env");
+  const accessToken =
+    process.env.TRANSAK_ACCESS_TOKEN ||
+    (await generateTransakAccessToken())?.accessToken;
+
+  if (!accessToken) {
+    throw new ApiError(500, "Transak token missing");
   }
 
-  const accessToken = await getPartnerAccessToken();
   const { sessionApiUrl } = getTransakEnvironmentConfig();
 
-  try {
-    const { data } = await axios.post(
-      sessionApiUrl,
-      { widgetParams },
-      {
-        headers: {
-          "access-token": accessToken,
-          "Content-Type": "application/json",
-          accept: "application/json",
-        },
-      }
-    );
-
-    const widgetUrl = data?.data?.widgetUrl;
-    if (!widgetUrl) {
-      throw new Error("Missing widgetUrl in Transak response");
+  const { data } = await axios.post(
+    sessionApiUrl,
+    { widgetParams },
+    {
+      headers: {
+        "access-token": accessToken,
+        "Content-Type": "application/json",
+      },
     }
+  );
 
-    return widgetUrl;
-  } catch (error) {
-    throw new ApiError(
-      error?.response?.status || 502,
-      error?.response?.data?.message || "Failed to create Transak widget URL"
-    );
+  if (!data?.data?.widgetUrl) {
+    throw new ApiError(500, "Failed to generate widget URL");
   }
+
+  return data.data.widgetUrl;
 };
 
-// real money ---> crypto
+
+// ================= ONRAMP =================
 export const createOnRampUrl = AsyncHandler(async (req, res) => {
   const user = req.user;
+  const { fiatAmount, countryCode = "IN" } = req.body;
 
   if (!user?.tronAddress) {
-    throw new ApiError(400, "Tron address not found");
+    throw new ApiError(400, "User wallet missing");
   }
 
+  const wallet = await Wallet.findOne({ user: user._id });
+  if (!wallet) throw new ApiError(404, "Wallet not found");
+
+  const externalId = crypto.randomUUID();
+
+  await Transaction.create({
+    userId: user._id,
+    type: "DEPOSIT",
+    externalId,
+    toAddress: wallet.address,
+    status: "PENDING",
+  });
+
   const { hostUrl, referrerDomain } = getTransakEnvironmentConfig();
+
   const widgetParams = {
     apiKey: process.env.TRANSAK_API_KEY,
     productsAvailed: "BUY",
     partnerCustomerId: user._id.toString(),
+    partnerOrderId: externalId,
     cryptoCurrencyCode: "TRX",
     network: "mainnet",
-    walletAddress: user.tronAddress,
+    walletAddress: wallet.address,
     disableWalletAddressForm: true,
     fiatCurrency: "INR",
-    fiatAmount: 1000,
+    countryCode,
+    defaultFiatAmount: Number(fiatAmount),
     hostURL: hostUrl,
-    redirectURL: `${hostUrl}/transak/success`,
+    redirectURL: `${hostUrl}/success`,
     referrerDomain,
   };
 
   const url = await createTransakWidgetUrl(widgetParams);
 
-  return res.status(200).json(
-    new ApiResponse(200, { url }, "On-ramp URL generated successfully")
+  return res.json(
+    new ApiResponse(200, { url, orderId: externalId }, "Success")
   );
 });
 
-// user wallet ---> admin wallet
-export const sweepToAdminWallet = async (req, res, next) => {
-  let sweepTx;
+
+// ================= SWEEP TO ADMIN =================
+export const sweepToAdminWallet = async ({ userAddress, amount, txId }) => {
+  if (!userAddress || !amount || !txId) {
+    throw new ApiError(400, "Invalid sweep data");
+  }
+
+  // 🔒 prevent duplicate sweep
+  const exists = await Transaction.findOne({
+    txId,
+    type: "SWEEP",
+  });
+
+  if (exists) return;
+
+  const wallet = await Wallet.findOne({ address: userAddress });
+  if (!wallet || wallet.isAdmin) return;
+
+  const adminWallet = await Wallet.findOne({ isAdmin: true });
+  if (!adminWallet) throw new ApiError(500, "Admin wallet missing");
+
+  const mnemonic = decrypt(wallet.mnemonic);
+  const privateKey = derivePrivateKeyFromMnemonic(mnemonic);
+
+  const NETWORK_FEE = Number(process.env.TRON_FEE || 1);
+  const sweepAmount = amount - NETWORK_FEE;
+
+  if (sweepAmount <= 0) return;
+
+  const sweepTx = await Transaction.create({
+    userId: wallet.user,
+    type: "SWEEP",
+    amount: sweepAmount,
+    fromAddress: userAddress,
+    toAddress: adminWallet.address,
+    txId,
+    status: "PENDING",
+  });
 
   try {
-    const { userAddress, amount, txId } = req.body;
-
-    if (!userAddress || !amount || !txId) {
-      throw new ApiError(400, "Invalid sweep payload");
-    }
-
-    const exists = await Transaction.findOne({ txId });
-    if (exists) {
-      return { success: true };
-    }
-
-    const wallet = await Wallet.findOne({ address: userAddress });
-    if (!wallet) throw new ApiError(404, "Wallet not found");
-    if (wallet.isAdmin) throw new ApiError(400, "Cannot sweep admin");
-
-    const adminWallet = await Wallet.findOne({ isAdmin: true });
-    if (!adminWallet) throw new ApiError(500, "Admin wallet missing");
-
-    const mnemonic = decrypt(wallet.mnemonic);
-    const privateKey = derivePrivateKeyFromMnemonic(mnemonic);
-
-    const NETWORK_FEE = 1.5;
-    const sweepAmount = amount - NETWORK_FEE;
-
-    if (sweepAmount <= 0) {
-      return { success: false };
-    }
-
-    sweepTx = await Transaction.create({
-      userId: wallet.user,
-      type: "SWEEP",
-      amount: sweepAmount,
-      fromAddress: userAddress,
-      toAddress: adminWallet.address,
-      txId,
-      status: "PENDING",
-    });
-
     const response = await tatumClient.post("/tron/transaction", {
       to: adminWallet.address,
       amount: sweepAmount.toString(),
       privateKey,
     });
 
-    await Wallet.findOneAndUpdate(
+    await Wallet.updateOne(
       { isAdmin: true },
       { $inc: { balance: sweepAmount } }
     );
@@ -206,20 +163,15 @@ export const sweepToAdminWallet = async (req, res, next) => {
     sweepTx.status = "SUCCESS";
     sweepTx.txId = response.data.txId;
     await sweepTx.save();
-
-    return { success: true };
   } catch (err) {
-    if (sweepTx) {
-      sweepTx.status = "FAILED";
-      await sweepTx.save();
-    }
-
-    if (next) return next(err);
-    throw new ApiError(500, "Sweep failed");
+    sweepTx.status = "FAILED";
+    await sweepTx.save();
+    throw err;
   }
 };
 
-// admin wallet -----> user wallet only
+
+// ================= WITHDRAW =================
 export const withdrawTrx = AsyncHandler(async (req, res) => {
   const { amount, toAddress } = req.body;
   const user = req.user;
@@ -228,21 +180,14 @@ export const withdrawTrx = AsyncHandler(async (req, res) => {
     throw new ApiError(400, "Invalid amount");
   }
 
-  if (!toAddress) {
-    throw new ApiError(400, "Destination address required");
-  }
-
   const adminWallet = await Wallet.findOne({ isAdmin: true });
   if (!adminWallet) throw new ApiError(500, "Admin wallet missing");
-  if (!adminWallet.mnemonic) throw new ApiError(500, "Admin wallet mnemonic missing");
 
   if (adminWallet.balance < amount) {
     throw new ApiError(400, "Admin insufficient balance");
   }
 
-  const mnemonic = decrypt(adminWallet.mnemonic);
-  const privateKey = derivePrivateKeyFromMnemonic(mnemonic);
-
+  // 🔒 deduct user balance first
   if (user.role !== "admin") {
     const updated = await Wallet.findOneAndUpdate(
       { user: user._id, balance: { $gte: amount } },
@@ -258,29 +203,32 @@ export const withdrawTrx = AsyncHandler(async (req, res) => {
     type: "WITHDRAW",
     amount,
     status: "PENDING",
-    fromAddress: adminWallet.address,
     toAddress,
   });
 
   try {
+    const mnemonic = decrypt(adminWallet.mnemonic);
+    const privateKey = derivePrivateKeyFromMnemonic(mnemonic);
+
     const response = await tatumClient.post("/tron/transaction", {
       to: toAddress,
       amount: amount.toString(),
       privateKey,
     });
 
-    await Wallet.findOneAndUpdate(
-      { isAdmin: true, balance: { $gte: amount } },
+    await Wallet.updateOne(
+      { isAdmin: true },
       { $inc: { balance: -amount } }
     );
 
     tx.txId = response.data.txId;
+    tx.status = "SUCCESS";
+    tx.completedAt = new Date();
     await tx.save();
 
-    return res.status(200).json(
-      new ApiResponse(200, { txId: tx.txId }, "Withdraw initiated")
-    );
+    return res.json(new ApiResponse(200, { txId: tx.txId }));
   } catch (err) {
+    // rollback user balance
     if (user.role !== "admin") {
       await Wallet.updateOne(
         { user: user._id },
@@ -295,7 +243,8 @@ export const withdrawTrx = AsyncHandler(async (req, res) => {
   }
 });
 
-// real crypto ---> bank account (fiat)
+
+// ================= OFFRAMP =================
 export const createOffRampUrl = AsyncHandler(async (req, res) => {
   const user = req.user;
   const { amount } = req.body;
@@ -304,69 +253,60 @@ export const createOffRampUrl = AsyncHandler(async (req, res) => {
     throw new ApiError(400, "Invalid amount");
   }
 
-  if (!user?.tronAddress) {
-    throw new ApiError(400, "User wallet address missing");
-  }
-
-  const { hostUrl, referrerDomain } = getTransakEnvironmentConfig();
-
   const wallet = await Wallet.findOneAndUpdate(
     { user: user._id, balance: { $gte: amount } },
     { $inc: { balance: -amount } },
     { new: true }
   );
 
-  if (!wallet) {
-    throw new ApiError(400, "Insufficient balance");
-  }
+  if (!wallet) throw new ApiError(400, "Insufficient balance");
 
-  const tx = await Transaction.create({
+  const externalId = crypto.randomUUID();
+
+  await Transaction.create({
     userId: user._id,
     type: "WITHDRAW",
     amount,
+    externalId,
     status: "PENDING",
-    externalId: crypto.randomUUID(),
   });
 
   try {
+    const { hostUrl, referrerDomain } = getTransakEnvironmentConfig();
+
     const widgetParams = {
       apiKey: process.env.TRANSAK_API_KEY,
       productsAvailed: "SELL",
       partnerCustomerId: user._id.toString(),
-      partnerOrderId: tx.externalId,
+      partnerOrderId: externalId,
       cryptoCurrencyCode: "TRX",
       network: "mainnet",
       walletAddress: user.tronAddress,
-      disableWalletAddressForm: true,
       cryptoAmount: amount.toString(),
       fiatCurrency: "INR",
       hostURL: hostUrl,
-      redirectURL: `${hostUrl}/transak/offramp-success`,
+      redirectURL: `${hostUrl}/offramp-success`,
       referrerDomain,
-      walletRedirection: true,
     };
 
     const url = await createTransakWidgetUrl(widgetParams);
 
-    return res.status(200).json(
-      new ApiResponse(
-        200,
-        {
-          url,
-          transactionId: tx._id,
-        },
-        "Off-ramp URL generated"
-      )
-    );
-  } catch (error) {
+    return res.json(new ApiResponse(200, { url }));
+  } catch (err) {
     await Wallet.updateOne(
       { user: user._id },
       { $inc: { balance: amount } }
     );
 
-    tx.status = "FAILED";
-    await tx.save();
+    await Transaction.updateOne(
+      { externalId },
+      {
+        status: "FAILED",
+        processed: true,
+        lastError: err.message,
+      }
+    );
 
-    throw error;
+    throw err;
   }
 });

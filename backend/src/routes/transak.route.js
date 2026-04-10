@@ -1,30 +1,25 @@
 import express from "express";
-import axios from "axios";
+import { getTransakAccessToken } from "../controller/tatum/transak.controller.js";
 
 const router = express.Router();
 
-router.get("/token", async (req, res) => {
-  try {
-    const response = await axios.post(
-      "https://api-stg.transak.com/partners/api/v2/refresh-token",
-      {
-        apiKey: process.env.TRANSAK_API_KEY,
-      },
-      {
-        headers: {
-          "api-secret": process.env.TRANSAK_API_SECRET,
-          "Content-Type": "application/json",
-        },
-      }
-    );
+router.get("/token", getTransakAccessToken);
 
-    return res.json(response.data);
-  } catch (error) {
-    console.error(error.response?.data || error.message);
-    return res.status(500).json({
-      error: "Failed to fetch Transak token",
-    });
-  }
+router.get("/success", (req, res) => {
+  const {
+    orderId,
+    status,
+    cryptoAmount,
+    walletAddress
+  } = req.query;
+
+  // Save to DB (important)
+  console.log({ orderId, status, cryptoAmount, walletAddress });
+
+  res.send(`
+    <h2>Payment Status: ${status}</h2>
+    <p>Order ID: ${orderId}</p>
+  `);
 });
 
 export default router;

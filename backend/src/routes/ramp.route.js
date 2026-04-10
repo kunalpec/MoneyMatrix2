@@ -13,7 +13,7 @@ const router = Router();
 router.use(verifyJWT);
 
 // Generate Transak Buy URL (Crypto On-ramp)
-router.get("/on-ramp",createOnRampUrl);
+router.post("/on-ramp",createOnRampUrl);
 
 // Generate Transak Sell URL (Crypto Off-ramp)
 router.post("/off-ramp",createOffRampUrl);
