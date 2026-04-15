@@ -11,7 +11,11 @@ export const app = express();
 app.use(cors(corsOptions));
 app.use(morgan("dev"));
 app.use(cookieParser());
-app.use(express.json());
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf.toString("utf8");
+  }
+}));
 app.use(express.urlencoded({extended:true}));
 
 

@@ -1,8 +1,12 @@
 import express from "express";
-import { getTransakAccessToken } from "../controller/tatum/transak.controller.js";
+import {
+  getTransakAccessToken,
+  getTransakWebhookSignature,
+} from "../controller/tatum/transak.controller.js";
 
 const router = express.Router();
 
+router.post("/signature", getTransakWebhookSignature);
 router.get("/token", getTransakAccessToken);
 
 router.get("/success", (req, res) => {

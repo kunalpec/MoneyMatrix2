@@ -1,18 +1,24 @@
 import nodemailer from "nodemailer";
 import { ApiError } from "./ApiError.util.js";
 import dotenv from "dotenv";
+
 dotenv.config();
 
+// ======== Email Config Setup (1) ========
 const emailUser = String(process.env.EMAIL_USER || "").trim();
 const emailPass = String(process.env.EMAIL_PASS || "")
   .trim()
   .replace(/\s+/g, "");
 const emailHost = String(process.env.EMAIL_HOST || "smtp.gmail.com").trim();
 const emailPort = Number(process.env.EMAIL_PORT || 587);
-const emailSecure = String(process.env.EMAIL_SECURE || "false").trim().toLowerCase() === "true";
+const emailSecure =
+  String(process.env.EMAIL_SECURE || "false").trim().toLowerCase() === "true";
 const allowInvalidTls =
-  String(process.env.EMAIL_ALLOW_INVALID_TLS || "false").trim().toLowerCase() === "true";
+  String(process.env.EMAIL_ALLOW_INVALID_TLS || "false")
+    .trim()
+    .toLowerCase() === "true";
 
+// ======== Email Transporter Create (2) ========
 const transporter = nodemailer.createTransport({
   host: emailHost,
   port: emailPort,
@@ -20,24 +26,27 @@ const transporter = nodemailer.createTransport({
   requireTLS: !emailSecure,
   auth: {
     user: emailUser,
-    pass: emailPass
+    pass: emailPass,
   },
   tls: {
     servername: emailHost,
-    rejectUnauthorized: !allowInvalidTls
-  }
+    rejectUnauthorized: !allowInvalidTls,
+  },
 });
 
+// ======== Send Custom Email (3) ========
 export const SendCustomEmail = async ({ to, subject, text }) => {
   if (!emailUser || !emailPass) {
-    throw new Error("Email is not configured. Set EMAIL_USER and EMAIL_PASS in backend/.env");
+    throw new Error(
+      "Email is not configured. Set EMAIL_USER and EMAIL_PASS in backend/.env"
+    );
   }
 
   const mailOptions = {
     from: `MoneyMatrix <${emailUser}>`,
     to,
     subject,
-    text
+    text,
   };
 
   try {

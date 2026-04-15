@@ -20,6 +20,15 @@ const transactionSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    amountSun: {
+      type: Number,
+      default: 0,
+      min: 0,
+      validate: {
+        validator: Number.isInteger,
+        message: "amountSun must be an integer",
+      },
+    },
 
     status: {
       type: String,
@@ -43,10 +52,12 @@ const transactionSchema = new mongoose.Schema(
     // 🔗 Blockchain / external references
     txId: {
       type: String,
+      trim: true,
     },
 
     externalId: {
       type: String, // partnerOrderId (Transak)
+      trim: true,
     },
 
     // 💸 Addresses
@@ -68,6 +79,7 @@ const transactionSchema = new mongoose.Schema(
     retryCount: {
       type: Number,
       default: 0,
+      min: 0,
     },
 
     lastError: String,
@@ -86,13 +98,23 @@ const transactionSchema = new mongoose.Schema(
 // 🔐 Prevent duplicate externalId (important for Transak)
 transactionSchema.index(
   { externalId: 1 },
-  { unique: true, partialFilterExpression: { externalId: { $exists: true } } }
+  {
+    unique: true,
+    partialFilterExpression: {
+      externalId: { $exists: true, $type: "string" },
+    },
+  }
 );
 
 // 🔐 Prevent duplicate txId (blockchain safety)
 transactionSchema.index(
   { txId: 1 },
-  { unique: true, partialFilterExpression: { txId: { $exists: true } } }
+  {
+    unique: true,
+    partialFilterExpression: {
+      txId: { $exists: true, $type: "string" },
+    },
+  }
 );
 
 export const Transaction = mongoose.model("Transaction", transactionSchema);
