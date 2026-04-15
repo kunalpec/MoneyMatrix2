@@ -218,8 +218,8 @@ export const userLogout = AsyncHandler(async (req, res) => {
     await User.findByIdAndUpdate(
         req.user._id,
         { $set: { refreshToken: null } },
-        { new: true }
-    );
+        { returnDocument: "after" }
+      );
 
     res.clearCookie("accessToken", cookieOptions);
     res.clearCookie("refreshToken", cookieOptions);

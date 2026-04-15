@@ -6,9 +6,11 @@ import { ApiError } from "../../util/ApiError.util.js";
 import { ApiResponse } from "../../util/ApiResponse.util.js";
 import { sweepToAdminWallet } from "./ramp.controller.js";
 
-
-// ================= VERIFY TRANSAK SIGNATURE =================
 const verifyTransakSignature = (req) => {
+  if (process.env.NODE_ENV === "development") {
+    return;
+  }
+
   const signature = req.headers["x-transak-signature"];
   const secret = process.env.TRANSAK_WEBHOOK_SECRET;
 
@@ -26,8 +28,6 @@ const verifyTransakSignature = (req) => {
   }
 };
 
-
-// ================= VERIFY TATUM =================
 const verifyTatum = (req) => {
   const secret = process.env.TATUM_WEBHOOK_SECRET;
   if (!secret) return;
@@ -38,8 +38,6 @@ const verifyTatum = (req) => {
   }
 };
 
-
-// ================= PARSE TRANSAK =================
 const getPayload = (body = {}) => {
   if (body?.eventType && body?.data) {
     return { eventType: body.eventType, data: body.data };
@@ -55,20 +53,16 @@ const getPayload = (body = {}) => {
 const getAmount = (data = {}) => {
   return Number(
     data.cryptoAmount ||
-    data.cryptoCurrencyAmount ||
-    data.totalAmount ||
-    0
+      data.cryptoCurrencyAmount ||
+      data.totalAmount ||
+      0
   );
 };
 
-
-// ================= TRANSAK WEBHOOK =================
 export const transakWebhook = AsyncHandler(async (req, res) => {
-
   verifyTransakSignature(req);
 
   const { eventType, data } = getPayload(req.body);
-
   const orderId = data.partnerOrderId || data.orderId || data.id;
 
   if (!orderId) {
@@ -85,36 +79,41 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
     tx.metadata = data;
 
     switch (eventType) {
-
-      // ================= SUCCESS =================
       case "ORDER_COMPLETED":
       case "COMPLETED":
       case "SUCCESS": {
-        if (tx.status === "SUCCESS") {
+        if (tx.processed) {
           return res.json(new ApiResponse(200, { orderId }, "Already processed"));
         }
 
-        // For on-ramp deposits, the on-chain Tatum webhook is the source of truth.
-        // Transak only confirms the fiat order completed successfully.
         if (tx.type === "DEPOSIT") {
           const amount = getAmount(data);
-          if (amount > 0) {
-            tx.amount = amount;
+          if (amount <= 0) {
+            throw new ApiError(400, "Invalid deposit amount");
           }
 
+          tx.amount = amount;
+          tx.txId =
+            data.transactionHash ||
+            data.cryptoTransactionHash ||
+            tx.txId;
           tx.status = "PROCESSING";
           tx.processed = false;
           await tx.save();
 
           return res.json(
-            new ApiResponse(200, { orderId }, "Deposit order confirmed, awaiting blockchain settlement")
+            new ApiResponse(
+              200,
+              { orderId },
+              "Deposit order confirmed, waiting for blockchain deposit"
+            )
           );
         }
 
-        // Off-ramp is completed once Transak confirms the bank payout.
         if (tx.type === "WITHDRAW") {
           tx.status = "SUCCESS";
           tx.processed = true;
+          tx.processedAt = new Date();
           tx.completedAt = new Date();
           await tx.save();
 
@@ -122,9 +121,10 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
             new ApiResponse(200, { orderId }, "Withdraw completed (bank success)")
           );
         }
+
+        break;
       }
 
-      // ================= FAILED =================
       case "FAILED":
       case "ORDER_FAILED":
       case "CANCELLED": {
@@ -134,8 +134,8 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
 
         tx.status = "FAILED";
         tx.processed = true;
+        tx.processedAt = new Date();
 
-        // Refund only off-ramp withdrawals. Deposits were never debited.
         if (tx.type === "WITHDRAW" && tx.userId) {
           await Wallet.updateOne(
             { user: tx.userId },
@@ -152,25 +152,26 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
 
       default:
         await tx.save();
-        return res.json(
-          new ApiResponse(200, null, "Ignored")
-        );
+        return res.json(new ApiResponse(200, null, "Ignored"));
     }
-
   } catch (err) {
     console.error("Transak webhook error:", err);
 
-    tx.status = "FAILED";
+    if (tx.type !== "DEPOSIT" || tx.status !== "SUCCESS") {
+      tx.status = "FAILED";
+      tx.processed = true;
+      tx.processedAt = new Date();
+    } else {
+      tx.lastError = err.message;
+    }
+
     await tx.save();
 
     throw err;
   }
 });
 
-
-// ================= TATUM DEPOSIT =================
 export const tronWebhook = AsyncHandler(async (req, res) => {
-
   verifyTatum(req);
 
   const { address, amount, txId } = req.body;
@@ -179,7 +180,6 @@ export const tronWebhook = AsyncHandler(async (req, res) => {
     throw new ApiError(400, "Invalid payload");
   }
 
-  // 🔒 prevent duplicate
   const exists = await Transaction.findOne({
     txId,
     type: "DEPOSIT",
@@ -194,26 +194,50 @@ export const tronWebhook = AsyncHandler(async (req, res) => {
     return res.json(new ApiResponse(200, null, "Ignored"));
   }
 
-  const tx = await Transaction.create({
-    userId: wallet.user,
+  let tx = await Transaction.findOne({
     type: "DEPOSIT",
-    amount,
-    txId,
     toAddress: address,
-    status: "SUCCESS",
-  });
+    processed: false,
+  }).sort({ createdAt: -1 });
 
-  // 💰 credit
-  await Wallet.updateOne(
-    { user: wallet.user },
-    { $inc: { balance: amount } }
-  );
+  if (tx) {
+    await Wallet.updateOne(
+      { user: wallet.user },
+      { $inc: { balance: Number(amount) } }
+    );
 
-  // 🧹 sweep
+    tx.amount = Number(amount);
+    tx.txId = txId;
+    tx.status = "SUCCESS";
+    tx.processed = true;
+    tx.processedAt = new Date();
+    tx.confirmedAt = new Date();
+    tx.completedAt = new Date();
+    await tx.save();
+  } else {
+    tx = await Transaction.create({
+      userId: wallet.user,
+      type: "DEPOSIT",
+      amount: Number(amount),
+      txId,
+      toAddress: address,
+      status: "SUCCESS",
+      processed: true,
+      processedAt: new Date(),
+      confirmedAt: new Date(),
+      completedAt: new Date(),
+    });
+
+    await Wallet.updateOne(
+      { user: wallet.user },
+      { $inc: { balance: Number(amount) } }
+    );
+  }
+
   if (!wallet.isAdmin) {
     await sweepToAdminWallet({
       userAddress: address,
-      amount,
+      amount: Number(amount),
       txId: txId + "_SWEEP",
     });
   }
@@ -221,10 +245,7 @@ export const tronWebhook = AsyncHandler(async (req, res) => {
   return res.json(new ApiResponse(200, { txId }, "Deposit done"));
 });
 
-
-// ================= TATUM WITHDRAW =================
 export const tronWithdrawWebhook = AsyncHandler(async (req, res) => {
-
   verifyTatum(req);
 
   const { txId } = req.body;
@@ -243,7 +264,6 @@ export const tronWithdrawWebhook = AsyncHandler(async (req, res) => {
     return res.json(new ApiResponse(200, null, "Ignored"));
   }
 
-  // 🔁 ONLY PROCESSING (NOT SUCCESS)
   tx.status = "PROCESSING";
   tx.confirmedAt = new Date();
   await tx.save();

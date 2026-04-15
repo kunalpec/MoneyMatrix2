@@ -23,23 +23,30 @@ const transactionSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["PENDING", "PROCESSING", "SUCCESS", "FAILED"],
+      enum: ["PENDING", "LOCKED", "PROCESSING", "SUCCESS", "FAILED"],
       default: "PENDING",
       index: true,
+    },
+
+    provider: {
+      type: String,
+      enum: ["TRANSAK", "TATUM", "SYSTEM", null],
+      default: null,
+      index: true,
+    },
+
+    currency: {
+      type: String,
+      default: null,
     },
 
     // 🔗 Blockchain / external references
     txId: {
       type: String,
-      index: true,
-      sparse: true,
     },
 
     externalId: {
       type: String, // partnerOrderId (Transak)
-      index: true,
-      unique: true,
-      sparse: true,
     },
 
     // 💸 Addresses
@@ -64,6 +71,8 @@ const transactionSchema = new mongoose.Schema(
     },
 
     lastError: String,
+    lockedAt: Date,
+    processedAt: Date,
 
     // ⏱ timestamps
     confirmedAt: Date,

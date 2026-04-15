@@ -34,7 +34,6 @@ export const UserWallet = AsyncHandler(async (req, res) => {
     const { address } = addressRes.data;
 
     // 🔐 Hash mnemonic for storage (Fixed logic)
-    const encryptedMnemonic = encrypt(mnemonic);
 
     // 🟢 STEP 3: Save wallet in DB (FIXED OBJECT SYNTAX)
     const wallet = await Wallet.create({
@@ -43,7 +42,7 @@ export const UserWallet = AsyncHandler(async (req, res) => {
         lockedBalance: 0,
         address: address,         // Added key name
         xpub: xpub,               // Added key name
-        mnemonic: encryptedMnemonic, // Added key name
+        mnemonic: encrypt(mnemonic),
         index: 0,   
         isAdmin:isAdmin,              // Added key name
     });

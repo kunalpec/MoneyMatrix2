@@ -9,8 +9,6 @@ import { generateTransakAccessToken } from "./transak.controller.js";
 import { decrypt, derivePrivateKeyFromMnemonic } from "../../util/EncryptDecrypt.util.js";
 import { Transaction } from "../../model/transaction.model.js";
 
-
-// ================= ENV CONFIG =================
 const getTransakEnvironmentConfig = () => {
   const isDev = process.env.NODE_ENV === "development";
 
@@ -29,12 +27,8 @@ const getTransakEnvironmentConfig = () => {
   };
 };
 
-
-// ================= CREATE TRANSAK URL =================
 const createTransakWidgetUrl = async (widgetParams) => {
-  const accessToken =
-    process.env.TRANSAK_ACCESS_TOKEN ||
-    (await generateTransakAccessToken())?.accessToken;
+  const accessToken = (await generateTransakAccessToken())?.accessToken;
 
   if (!accessToken) {
     throw new ApiError(500, "Transak token missing");
@@ -60,14 +54,21 @@ const createTransakWidgetUrl = async (widgetParams) => {
   return data.data.widgetUrl;
 };
 
-
-// ================= ONRAMP =================
 export const createOnRampUrl = AsyncHandler(async (req, res) => {
   const user = req.user;
-  const { fiatAmount, countryCode = "IN" } = req.body;
+  const {
+    fiatAmount,
+    countryCode = "IN",
+    fiatCurrency = "INR",
+    cryptoCurrencyCode = "TRX",
+  } = req.body;
 
   if (!user?.tronAddress) {
     throw new ApiError(400, "User wallet missing");
+  }
+
+  if (!fiatAmount || Number(fiatAmount) <= 0) {
+    throw new ApiError(400, "Invalid fiat amount");
   }
 
   const wallet = await Wallet.findOne({ user: user._id });
@@ -90,12 +91,12 @@ export const createOnRampUrl = AsyncHandler(async (req, res) => {
     productsAvailed: "BUY",
     partnerCustomerId: user._id.toString(),
     partnerOrderId: externalId,
-    cryptoCurrencyCode: "TRX",
+    cryptoCurrencyCode: String(cryptoCurrencyCode).toUpperCase(),
     network: "mainnet",
     walletAddress: wallet.address,
     disableWalletAddressForm: true,
-    fiatCurrency: "INR",
-    countryCode,
+    fiatCurrency: String(fiatCurrency).toUpperCase(),
+    countryCode: String(countryCode).toUpperCase(),
     defaultFiatAmount: Number(fiatAmount),
     hostURL: hostUrl,
     redirectURL: `${hostUrl}/success`,
@@ -109,23 +110,20 @@ export const createOnRampUrl = AsyncHandler(async (req, res) => {
   );
 });
 
-
-// ================= SWEEP TO ADMIN =================
 export const sweepToAdminWallet = async ({ userAddress, amount, txId }) => {
   if (!userAddress || !amount || !txId) {
     throw new ApiError(400, "Invalid sweep data");
   }
 
-  // 🔒 prevent duplicate sweep
   const exists = await Transaction.findOne({
-    txId,
     type: "SWEEP",
+    $or: [{ externalId: txId }, { txId }],
   });
 
-  if (exists) return;
+  if (exists) return exists;
 
   const wallet = await Wallet.findOne({ address: userAddress });
-  if (!wallet || wallet.isAdmin) return;
+  if (!wallet || wallet.isAdmin) return null;
 
   const adminWallet = await Wallet.findOne({ isAdmin: true });
   if (!adminWallet) throw new ApiError(500, "Admin wallet missing");
@@ -133,10 +131,10 @@ export const sweepToAdminWallet = async ({ userAddress, amount, txId }) => {
   const mnemonic = decrypt(wallet.mnemonic);
   const privateKey = derivePrivateKeyFromMnemonic(mnemonic);
 
-  const NETWORK_FEE = Number(process.env.TRON_FEE || 1);
-  const sweepAmount = amount - NETWORK_FEE;
+  const networkFee = Number(process.env.TRON_FEE || 1);
+  const sweepAmount = Number(amount) - networkFee;
 
-  if (sweepAmount <= 0) return;
+  if (sweepAmount <= 0) return null;
 
   const sweepTx = await Transaction.create({
     userId: wallet.user,
@@ -144,6 +142,7 @@ export const sweepToAdminWallet = async ({ userAddress, amount, txId }) => {
     amount: sweepAmount,
     fromAddress: userAddress,
     toAddress: adminWallet.address,
+    externalId: txId,
     txId,
     status: "PENDING",
   });
@@ -152,7 +151,7 @@ export const sweepToAdminWallet = async ({ userAddress, amount, txId }) => {
     const response = await tatumClient.post("/tron/transaction", {
       to: adminWallet.address,
       amount: sweepAmount.toString(),
-      privateKey,
+      fromPrivateKey: privateKey,
     });
 
     await Wallet.updateOne(
@@ -162,37 +161,39 @@ export const sweepToAdminWallet = async ({ userAddress, amount, txId }) => {
 
     sweepTx.status = "SUCCESS";
     sweepTx.txId = response.data.txId;
+    sweepTx.processed = true;
+    sweepTx.processedAt = new Date();
     await sweepTx.save();
   } catch (err) {
     sweepTx.status = "FAILED";
+    sweepTx.lastError = err?.response?.data?.message || err.message;
     await sweepTx.save();
     throw err;
   }
+
+  return sweepTx;
 };
 
-
-// ================= WITHDRAW =================
 export const withdrawTrx = AsyncHandler(async (req, res) => {
   const { amount, toAddress } = req.body;
   const user = req.user;
 
-  if (!amount || amount <= 0) {
+  if (!amount || Number(amount) <= 0) {
     throw new ApiError(400, "Invalid amount");
   }
 
   const adminWallet = await Wallet.findOne({ isAdmin: true });
   if (!adminWallet) throw new ApiError(500, "Admin wallet missing");
 
-  if (adminWallet.balance < amount) {
+  if (adminWallet.balance < Number(amount)) {
     throw new ApiError(400, "Admin insufficient balance");
   }
 
-  // 🔒 deduct user balance first
   if (user.role !== "admin") {
     const updated = await Wallet.findOneAndUpdate(
-      { user: user._id, balance: { $gte: amount } },
-      { $inc: { balance: -amount } },
-      { new: true }
+      { user: user._id, balance: { $gte: Number(amount) } },
+      { $inc: { balance: -Number(amount) } },
+      { returnDocument: "after" }
     );
 
     if (!updated) throw new ApiError(400, "Insufficient balance");
@@ -201,7 +202,7 @@ export const withdrawTrx = AsyncHandler(async (req, res) => {
   const tx = await Transaction.create({
     userId: user._id,
     type: "WITHDRAW",
-    amount,
+    amount: Number(amount),
     status: "PENDING",
     toAddress,
   });
@@ -212,51 +213,56 @@ export const withdrawTrx = AsyncHandler(async (req, res) => {
 
     const response = await tatumClient.post("/tron/transaction", {
       to: toAddress,
-      amount: amount.toString(),
-      privateKey,
+      amount: Number(amount).toString(),
+      fromPrivateKey: privateKey,
     });
 
     await Wallet.updateOne(
       { isAdmin: true },
-      { $inc: { balance: -amount } }
+      { $inc: { balance: -Number(amount) } }
     );
 
     tx.txId = response.data.txId;
     tx.status = "SUCCESS";
+    tx.processed = true;
+    tx.processedAt = new Date();
     tx.completedAt = new Date();
     await tx.save();
 
     return res.json(new ApiResponse(200, { txId: tx.txId }));
   } catch (err) {
-    // rollback user balance
     if (user.role !== "admin") {
       await Wallet.updateOne(
         { user: user._id },
-        { $inc: { balance: amount } }
+        { $inc: { balance: Number(amount) } }
       );
     }
 
     tx.status = "FAILED";
+    tx.lastError = err?.response?.data?.message || err.message;
     await tx.save();
 
     throw new ApiError(500, "Withdraw failed");
   }
 });
 
-
-// ================= OFFRAMP =================
 export const createOffRampUrl = AsyncHandler(async (req, res) => {
   const user = req.user;
-  const { amount } = req.body;
+  const {
+    amount,
+    fiatCurrency = "INR",
+    countryCode = "IN",
+    cryptoCurrencyCode = "TRX",
+  } = req.body;
 
-  if (!amount || amount <= 0) {
+  if (!amount || Number(amount) <= 0) {
     throw new ApiError(400, "Invalid amount");
   }
 
   const wallet = await Wallet.findOneAndUpdate(
-    { user: user._id, balance: { $gte: amount } },
-    { $inc: { balance: -amount } },
-    { new: true }
+    { user: user._id, balance: { $gte: Number(amount) } },
+    { $inc: { balance: -Number(amount) } },
+    { returnDocument: "after" }
   );
 
   if (!wallet) throw new ApiError(400, "Insufficient balance");
@@ -266,7 +272,7 @@ export const createOffRampUrl = AsyncHandler(async (req, res) => {
   await Transaction.create({
     userId: user._id,
     type: "WITHDRAW",
-    amount,
+    amount: Number(amount),
     externalId,
     status: "PENDING",
   });
@@ -279,11 +285,12 @@ export const createOffRampUrl = AsyncHandler(async (req, res) => {
       productsAvailed: "SELL",
       partnerCustomerId: user._id.toString(),
       partnerOrderId: externalId,
-      cryptoCurrencyCode: "TRX",
+      cryptoCurrencyCode: String(cryptoCurrencyCode).toUpperCase(),
       network: "mainnet",
       walletAddress: user.tronAddress,
-      cryptoAmount: amount.toString(),
-      fiatCurrency: "INR",
+      cryptoAmount: Number(amount).toString(),
+      fiatCurrency: String(fiatCurrency).toUpperCase(),
+      countryCode: String(countryCode).toUpperCase(),
       hostURL: hostUrl,
       redirectURL: `${hostUrl}/offramp-success`,
       referrerDomain,
@@ -295,7 +302,7 @@ export const createOffRampUrl = AsyncHandler(async (req, res) => {
   } catch (err) {
     await Wallet.updateOne(
       { user: user._id },
-      { $inc: { balance: amount } }
+      { $inc: { balance: Number(amount) } }
     );
 
     await Transaction.updateOne(
@@ -303,6 +310,7 @@ export const createOffRampUrl = AsyncHandler(async (req, res) => {
       {
         status: "FAILED",
         processed: true,
+        processedAt: new Date(),
         lastError: err.message,
       }
     );

@@ -36,12 +36,25 @@ const walletSchema = new mongoose.Schema(
     },
     mnemonic:{
         type: String,
-        required: true,
-        unique: true,
+        default: null,
     },
     index:{
         type: Number,
         required: true,
+    },
+    signatureId: {
+      type: String,
+      default: null,
+      index: true,
+    },
+    signerProvider: {
+      type: String,
+      enum: ["TATUM_KMS", "EXTERNAL", null],
+      default: null,
+    },
+    signerRef: {
+      type: String,
+      default: null,
     },
     isAdmin: {
       type: Boolean,
