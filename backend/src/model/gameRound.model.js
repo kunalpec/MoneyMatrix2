@@ -36,6 +36,11 @@ const gameRoundSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    isSettled: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
 
     totalBetAmount: {
       type: Number,
@@ -106,7 +111,6 @@ gameRoundSchema.methods.setResult = function () {
 
   // ✅ finalize
   this.isResultDeclared = true;
-  this.status = "ended";
 };
 
 

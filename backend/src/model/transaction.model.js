@@ -46,7 +46,8 @@ const transactionSchema = new mongoose.Schema(
 
     currency: {
       type: String,
-      default: null,
+      enum: ["TRX", null],
+      default: "TRX",
     },
 
     // 🔗 Blockchain / external references
@@ -58,6 +59,12 @@ const transactionSchema = new mongoose.Schema(
     externalId: {
       type: String, // partnerOrderId (Transak)
       trim: true,
+    },
+
+    providerOrderId: {
+      type: String, // Transak orderId/order_id
+      trim: true,
+      index: true,
     },
 
     // 💸 Addresses

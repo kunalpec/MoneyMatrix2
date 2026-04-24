@@ -27,10 +27,12 @@ class GameEngine {
         this.io = null;
         this.adminRoom = "admin-room";
         this.usersRooms = new Map();
+        this.connectedUsers = new Map();
         this.currentRound = null;
         this.roundDuration = 60 * 1000;
         this.interval = null;
         this.resultDuration = 60 * 1000;
+        this.activeBetLocks = new Set();
     }
 
     async init() {
@@ -57,9 +59,26 @@ class GameEngine {
         }
     }
 
+    getLivePlayerCount() {
+        return Array.from(this.connectedUsers.values()).filter(
+            (entry) => entry?.role !== "admin"
+        ).length;
+    }
+
     async joinGame(user, socket) {
-        this.usersRooms.set(user._id.toString(), socket.id);
-        socket.join(user._id.toString());
+        const userId = user._id.toString();
+        const previousSocketId = this.usersRooms.get(userId);
+
+        if (previousSocketId && previousSocketId !== socket.id && this.io) {
+            this.io.sockets.sockets.get(previousSocketId)?.disconnect(true);
+        }
+
+        this.usersRooms.set(userId, socket.id);
+        this.connectedUsers.set(userId, {
+            socketId: socket.id,
+            role: user.role,
+        });
+        socket.join(userId);
 
         if (user.role === "admin") {
             socket.join(this.adminRoom);
@@ -70,17 +89,30 @@ class GameEngine {
 
         if (this.currentRound) {
             const walletSnapshot = await Wallet.findOne({ user: user._id })
-                .select("balance lockedBalance")
+                .select("trxBalanceSun trxLockedBalanceSun")
                 .lean();
-            this.sendEventToAdmin("player-count", this.usersRooms.size);
+            this.sendEventToAdmin("player-count", this.getLivePlayerCount());
             this.sendEventToUser(user._id, "current-round", this.currentRound);
-            this.sendEventToUser(user._id, "curret-wallet", walletSnapshot);
+            this.sendEventToUser(user._id, "curret-wallet", {
+                ...walletSnapshot,
+                trxBalance: (walletSnapshot?.trxBalanceSun || 0) / 1_000_000,
+                trxLockedBalance:
+                    (walletSnapshot?.trxLockedBalanceSun || 0) / 1_000_000,
+            });
         }
     }
 
-    async leaveGame(user) {
-        this.usersRooms.delete(user._id.toString());
-        this.sendEventToAdmin("player-count", this.usersRooms.size);
+    async leaveGame(user, socket = null) {
+        const userId = user._id.toString();
+        const currentSocketId = this.usersRooms.get(userId);
+
+        if (socket && currentSocketId && currentSocketId !== socket.id) {
+            return;
+        }
+
+        this.usersRooms.delete(userId);
+        this.connectedUsers.delete(userId);
+        this.sendEventToAdmin("player-count", this.getLivePlayerCount());
         console.log(`User left: ${user._id}`);
     }
 
@@ -134,6 +166,8 @@ class GameEngine {
     }
 
     async endGame() {
+        if (!this.currentRound) return;
+
         if (this.currentRound.status === "waiting") {
             console.log("phase: game is ended");
             this.sendEventToAllUsers("round-ended", {
@@ -144,34 +178,83 @@ class GameEngine {
             await this.currentRound.save({ validateBeforeSave: false });
             return;
         }
-        if (!this.currentRound) return;
+        const settlementNotifications = [];
+        let settledRound = null;
+        const session = await mongoose.startSession();
 
-        this.currentRound.setResult();
-        this.currentRound.status = "waiting";
-        this.currentRound.endTime = new Date(Date.now() + this.resultDuration);
-        await this.currentRound.save();
+        try {
+            await session.withTransaction(async () => {
+                const round = await GameRound.findById(this.currentRound._id).session(session);
 
-        const bets = await Bet.find({
-            round: this.currentRound._id,
-            status: "pending",
-        });
+                if (!round) {
+                    throw new ApiError(404, "Round not found for settlement");
+                }
 
-        for (const bet of bets) {
-            bet.calculateWin(this.currentRound.result);
-            const userSocketId = this.usersRooms.get(bet.user.toString());
-            await bet.save();
+                if (round.isSettled) {
+                    settledRound = round;
+                    return;
+                }
 
-            const wallet = await Wallet.findOne({ user: bet.user });
-            if (!wallet) continue;
+                round.setResult();
+                round.status = "waiting";
+                round.endTime = new Date(Date.now() + this.resultDuration);
+                round.isSettled = true;
+                await round.save({ session });
 
-            if (bet.status === "won") {
-                wallet.settleWin(bet.amount, bet.winAmount, this.io, userSocketId);
-            } else {
-                wallet.settleLoss(bet.amount);
+                const bets = await Bet.find({
+                    round: round._id,
+                    status: "pending",
+                }).session(session);
+
+                for (const bet of bets) {
+                    bet.calculateWin(round.result);
+                    await bet.save({ session });
+
+                    const wallet = await Wallet.findOne({ user: bet.user }).session(session);
+                    if (!wallet) {
+                        continue;
+                    }
+
+                    if (bet.status === "won") {
+                        wallet.settleWin(bet.amount, bet.winAmount);
+                    } else {
+                        wallet.settleLoss(bet.amount);
+                    }
+
+                    await wallet.save({ session });
+
+                    settlementNotifications.push({
+                        userId: bet.user.toString(),
+                        bet: bet.toObject(),
+                        wallet: {
+                            trxBalance: wallet.trxBalance,
+                            trxLockedBalance: wallet.trxLockedBalance,
+                        },
+                    });
+                }
+
+                settledRound = round;
+            });
+        } catch (error) {
+            console.error("ROUND_SETTLEMENT_FAILED", {
+                roundId: this.currentRound?._id?.toString?.(),
+                error: error?.message,
+            });
+            throw error;
+        } finally {
+            await session.endSession();
+        }
+
+        if (settledRound) {
+            if (typeof settledRound.$session === "function") {
+                settledRound.$session(null);
             }
+            this.currentRound = settledRound;
+        }
 
-            await wallet.save();
-            this.sendEventToUser(bet.user, "bet-result", bet);
+        for (const notification of settlementNotifications) {
+            this.sendEventToUser(notification.userId, "wallet-update", notification.wallet);
+            this.sendEventToUser(notification.userId, "bet-result", notification.bet);
         }
 
         this.sendEventToAllUsers("round-ended", {
@@ -185,108 +268,120 @@ class GameEngine {
     }
 
     async placeBet(user, color, amount) {
-        for (let attempt = 1; attempt <= MAX_BET_TRANSACTION_RETRIES; attempt += 1) {
-            const session = await mongoose.startSession();
+        if (user.role === "admin") {
+            throw new ApiError(403, "Admins cannot place bets");
+        }
 
-            try {
-                session.startTransaction();
+        if (!this.currentRound || this.currentRound.status !== "running") {
+            throw new ApiError(400, "Betting is currently closed");
+        }
 
-                if (user.role === "admin") {
-                    throw new ApiError(403, "Admins cannot place bets");
-                }
+        if (new Date() > this.currentRound.endTime) {
+            throw new ApiError(400, "Betting phase has ended");
+        }
 
-                if (!this.currentRound || this.currentRound.status !== "running") {
-                    throw new ApiError(400, "Betting is currently closed");
-                }
+        const validColors = ["red", "blue", "violet"];
+        if (!validColors.includes(color)) {
+            throw new ApiError(400, "Invalid color selected");
+        }
 
-                if (new Date() > this.currentRound.endTime) {
-                    throw new ApiError(400, "Betting phase has ended");
-                }
+        if (amount <= 0) {
+            throw new ApiError(400, "Bet amount must be greater than 0");
+        }
 
-                const validColors = ["red", "blue", "violet"];
-                if (!validColors.includes(color)) {
-                    throw new ApiError(400, "Invalid color selected");
-                }
+        const betLockKey = `${user._id}:${this.currentRound._id}`;
 
-                if (amount <= 0) {
-                    throw new ApiError(400, "Bet amount must be greater than 0");
-                }
+        if (this.activeBetLocks.has(betLockKey)) {
+            throw new ApiError(429, "Bet is already being processed");
+        }
 
-                const wallet = await Wallet.findOne({ user: user._id }).session(session);
-                if (!wallet) {
-                    throw new ApiError(404, "Wallet not found");
-                }
+        this.activeBetLocks.add(betLockKey);
 
-                wallet.lockAmount(amount);
-                await wallet.save({ session });
+        try {
+            for (let attempt = 1; attempt <= MAX_BET_TRANSACTION_RETRIES; attempt += 1) {
+                const session = await mongoose.startSession();
 
-                const betArray = await Bet.create([{
-                    user: user._id,
-                    round: this.currentRound._id,
-                    color,
-                    amount,
-                }], { session });
-                const bet = betArray[0];
+                try {
+                    session.startTransaction();
 
-                const round = await GameRound.findById(this.currentRound._id).session(session);
-                if (!round || round.status !== "running") {
-                    throw new ApiError(400, "Round is no longer accepting bets");
-                }
-
-                round.totalBetAmount += amount;
-                if (color === "red") round.totalRed += amount;
-                if (color === "blue") round.totalBlue += amount;
-                if (color === "violet") round.totalViolet += amount;
-
-                await round.save({ session });
-                await session.commitTransaction();
-
-                this.currentRound = round;
-
-                this.sendEventToUser(user._id, "bet-placed", {
-                    bet,
-                    balance: wallet.balance,
-                    lockedBalance: wallet.lockedBalance,
-                });
-
-                this.sendEventToAdmin("admin-bet-update", {
-                    userId: user._id,
-                    amount,
-                    color,
-                    roundId: this.currentRound._id,
-                    currentTotals: {
-                        total: round.totalBetAmount,
-                        red: round.totalRed,
-                        blue: round.totalBlue,
-                        violet: round.totalViolet
+                    const wallet = await Wallet.findOne({ user: user._id }).session(session);
+                    if (!wallet) {
+                        throw new ApiError(404, "Wallet not found");
                     }
-                });
 
-                return bet;
-            } catch (error) {
-                if (session.inTransaction()) {
-                    await session.abortTransaction();
+                    wallet.lock(amount);
+                    await wallet.save({ session });
+
+                    const betArray = await Bet.create([{
+                        user: user._id,
+                        round: this.currentRound._id,
+                        color,
+                        amount,
+                    }], { session });
+                    const bet = betArray[0];
+
+                    const round = await GameRound.findById(this.currentRound._id).session(session);
+                    if (!round || round.status !== "running") {
+                        throw new ApiError(400, "Round is no longer accepting bets");
+                    }
+
+                    round.totalBetAmount += amount;
+                    if (color === "red") round.totalRed += amount;
+                    if (color === "blue") round.totalBlue += amount;
+                    if (color === "violet") round.totalViolet += amount;
+
+                    await round.save({ session });
+                    await session.commitTransaction();
+
+                    this.currentRound = round;
+
+                    this.sendEventToUser(user._id, "bet-placed", {
+                        bet,
+                        trxBalance: wallet.trxBalance,
+                        trxLockedBalance: wallet.trxLockedBalance,
+                    });
+
+                    this.sendEventToAdmin("admin-bet-update", {
+                        userId: user._id,
+                        amount,
+                        color,
+                        roundId: this.currentRound._id,
+                        currentTotals: {
+                            total: round.totalBetAmount,
+                            red: round.totalRed,
+                            blue: round.totalBlue,
+                            violet: round.totalViolet
+                        }
+                    });
+
+                    return bet;
+                } catch (error) {
+                    if (session.inTransaction()) {
+                        await session.abortTransaction();
+                    }
+
+                    if (isRetryableTransactionError(error) && attempt < MAX_BET_TRANSACTION_RETRIES) {
+                        console.warn(
+                            `Bet transaction write conflict, retrying attempt ${attempt + 1}/${MAX_BET_TRANSACTION_RETRIES}`
+                        );
+                        continue;
+                    }
+
+                    console.error("Bet Transaction Failed:", error.message);
+
+                    if (error instanceof ApiError) throw error;
+
+                    if (isRetryableTransactionError(error)) {
+                        throw new ApiError(503, "Bet is busy right now, please retry");
+                    }
+
+                    throw new ApiError(400, error.message || "Failed to place bet");
+                } finally {
+                    session.endSession();
                 }
-
-                if (isRetryableTransactionError(error) && attempt < MAX_BET_TRANSACTION_RETRIES) {
-                    console.warn(
-                        `Bet transaction write conflict, retrying attempt ${attempt + 1}/${MAX_BET_TRANSACTION_RETRIES}`
-                    );
-                    continue;
-                }
-
-                console.error("Bet Transaction Failed:", error.message);
-
-                if (error instanceof ApiError) throw error;
-
-                if (isRetryableTransactionError(error)) {
-                    throw new ApiError(503, "Bet is busy right now, please retry");
-                }
-
-                throw new ApiError(400, error.message || "Failed to place bet");
-            } finally {
-                session.endSession();
             }
+        } finally {
+            this.activeBetLocks.delete(betLockKey);
         }
     }
 
@@ -349,6 +444,7 @@ class GameEngine {
                 await currBet.save();
             }
         }
+        this.connectedUsers.clear();
         console.log("Game Engine Loop Stopped");
     }
 }

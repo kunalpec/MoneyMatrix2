@@ -15,7 +15,10 @@ export const walletInfo = AsyncHandler(async (req, res) => {
         new ApiResponse(200, {
             wallet: {
                 address: wallet.address,
-                balance: wallet.balance,
+                trxBalanceSun: wallet.trxBalanceSun,
+                trxBalance: wallet.trxBalance,
+                trxLockedBalanceSun: wallet.trxLockedBalanceSun,
+                trxLockedBalance: wallet.trxLockedBalance,
             },
         }, "Wallet information retrieved successfully")
     );

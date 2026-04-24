@@ -6,6 +6,9 @@ import { app } from "./app.js";
 import http from "http";
 import { StartIoServer } from "./socket/index.js";
 import { gameEngine } from "./service/gameEngine.service.js";
+import { startWithdrawalWorker } from "./queue/withdrawal.queue.js";
+import { startDepositMonitor } from "./service/depositMonitor.service.js";
+import { logger } from "./util/logger.util.js";
 
 export const PORT = process.env.PORT || 5000;
 
@@ -17,14 +20,16 @@ connectDB().then(()=>{
     // Initialize the game engine after DB is connected
     gameEngine.init();
     gameEngine.startGame();
+    startWithdrawalWorker();
+    startDepositMonitor();
     // start the server
     server.on("error",()=>{
-        console.log("server error from index.js file");
+        logger.error("server.error");
     });
     // listent the server
     server.listen(PORT,()=>{
-        console.log(`server is running on : http://localhost:${PORT}`);
+        logger.info("server.started", { port: PORT });
     });
 }).catch((error)=>{
-    console.log("Error msg: ",error.message);
+    logger.error("server.bootstrap_failed", { error: error.message });
 });

@@ -24,6 +24,32 @@ const cookieOptions = {
     secure: process.env.NODE_ENV === "production"
 };
 
+const sendOtpNotifications = async ({ email, phone, otp }) => {
+    try {
+        if (email) {
+            await SendCustomEmail({
+                to: email,
+                subject: "Your OTP Code",
+                text: `Your OTP is ${otp}`
+            });
+        }
+    } catch (err) {
+        console.error("Email Error:", err.message);
+    }
+
+    try {
+        if (process.env.TWILIO_PHONE_NUMBER && phone) {
+            await twilioClient.messages.create({
+                body: `Your OTP is: ${otp}`,
+                from: process.env.TWILIO_PHONE_NUMBER,
+                to: phone
+            });
+        }
+    } catch (err) {
+        console.error("SMS Error:", err.message);
+    }
+};
+
 const resolveSignupRole = (requestedRole, adminKey) => {
     if (requestedRole !== "admin") {
         return "user";
@@ -60,8 +86,7 @@ export const userSignup = AsyncHandler(async (req, res) => {
 
     let user = await User.findOne({ $or: [{ email }, { phone }] });
 
-    if (user && user.otp === null && !user.otpExpires) {
-        // Assuming if OTP is cleared, user is 'verified' or active
+    if (user?.isVerified) {
         throw new ApiError(409, "User already exists");
     }
 
@@ -71,37 +96,24 @@ export const userSignup = AsyncHandler(async (req, res) => {
     if (!user) {
         user = new User({ name, email, phone, password, role });
     } else {
-        user.name = name;
-        user.email = email;
-        user.phone = phone;
-        user.password = password;
-        user.role = role;
+        user.otp = hashedOtp;
+        user.otpExpires = new Date(Date.now() + 10 * 60 * 1000);
+
+        await user.save({ validateBeforeSave: false });
+        await sendOtpNotifications({
+            email: user.email,
+            phone: user.phone,
+            otp,
+        });
+
+        return res.json(new ApiResponse(200, {}, "OTP resent successfully"));
     }
 
     user.otp = hashedOtp;
     user.otpExpires = new Date(Date.now() + 10 * 60 * 1000);
 
     await user.save();
-
-    // Send Email
-    try {
-        await SendCustomEmail({
-            to: email,
-            subject: "Your OTP Code",
-            text: `Your OTP is ${otp}`
-        });
-    } catch (err) { console.error("Email Error:", err.message); }
-
-    // Send SMS
-    try {
-        if (process.env.TWILIO_PHONE_NUMBER) {
-            await twilioClient.messages.create({
-                body: `Your OTP is: ${otp}`,
-                from: process.env.TWILIO_PHONE_NUMBER,
-                to: phone
-            });
-        }
-    } catch (err) { console.error("SMS Error:", err.message); }
+    await sendOtpNotifications({ email, phone, otp });
 
     return res.json(new ApiResponse(200, {}, "OTP sent successfully"));
 });
@@ -204,10 +216,16 @@ export const refreshUserToken = AsyncHandler(async (req, res) => {
             maxAge: 7 * 24 * 60 * 60 * 1000
         });
 
-        return res.json(new ApiResponse(200, { accessToken }, "Token refreshed"));
+        return res.json(new ApiResponse(200, { accessToken, user }, "Token refreshed"));
     } catch (error) {
         throw new ApiError(401, error?.message || "Invalid refresh token");
     }
+});
+
+export const getCurrentUser = AsyncHandler(async (req, res) => {
+    return res.json(
+        new ApiResponse(200, { user: req.user }, "Current user fetched successfully")
+    );
 });
 
 /* =========================
@@ -245,28 +263,7 @@ export const userForgotPassword = AsyncHandler(async (req, res) => {
     user.newpassword = newpassword; // Store new password temporarily until OTP is verified
     await user.save({ validateBeforeSave: false });
 
-    // Send SMS/Email logic (same as signup)...
-    // Send Email
-    try {
-        if (email) {
-            await SendCustomEmail({
-                to: email,
-                subject: "Your OTP Code",
-                text: `Your OTP is ${otp}`
-            });
-        }
-    } catch (err) { console.error("Email Error:", err.message); }
-
-    // Send SMS
-    try {
-        if (process.env.TWILIO_PHONE_NUMBER) {
-            await twilioClient.messages.create({
-                body: `Your OTP is: ${otp}`,
-                from: process.env.TWILIO_PHONE_NUMBER,
-                to: phone
-            });
-        }
-    } catch (err) { console.error("SMS Error:", err.message); }
+    await sendOtpNotifications({ email, phone, otp });
     return res.json(new ApiResponse(200, {}, "Reset OTP sent"));
 });
 

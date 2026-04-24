@@ -39,20 +39,26 @@ const ensureAdminUser = (user) => {
 
 export const initializeAuth = createAsyncThunk(
   "auth/initializeAuth",
-  async (_, { getState, dispatch, rejectWithValue }) => {
-    const existingUser = getState().auth.user || persistedSession?.user || null;
-
+  async (_, { dispatch, rejectWithValue }) => {
     try {
-      const response = await apiRequest("/users/refresh-token", {
+      const refreshResponse = await apiRequest("/users/refresh-token", {
         method: "POST",
         token: persistedSession?.accessToken || "",
         retryAuth: false,
         onAccessToken: (accessToken) => dispatch(setAccessToken(accessToken)),
       });
 
+      const accessToken = refreshResponse?.data?.accessToken || "";
+      const meResponse = await apiRequest("/auth/me", {
+        method: "GET",
+        token: accessToken,
+        retryAuth: false,
+        onAccessToken: (nextAccessToken) => dispatch(setAccessToken(nextAccessToken)),
+      });
+
       return {
-        accessToken: response?.data?.accessToken || "",
-        user: existingUser,
+        accessToken,
+        user: meResponse?.data?.user || null,
       };
     } catch (error) {
       return rejectWithValue(extractMessage(error, "Unable to restore session"));
@@ -205,12 +211,12 @@ export const logoutAdmin = createAsyncThunk(
 const authSlice = createSlice({
   name: "auth",
   initialState: {
-    user: persistedSession?.user || null,
+    user: null,
     accessToken: persistedSession?.accessToken || "",
     pendingPhone: persistedSession?.pendingPhone || "",
     status: "idle",
     initialized: false,
-    isAuthenticated: Boolean(persistedSession?.accessToken && persistedSession?.user),
+    isAuthenticated: false,
     error: "",
     notice: "",
   },
@@ -282,10 +288,18 @@ const authSlice = createSlice({
           pendingPhone: state.pendingPhone,
         });
       })
-      .addCase(initializeAuth.rejected, (state) => {
+      .addCase(initializeAuth.rejected, (state, action) => {
         state.status = "idle";
         state.initialized = true;
-        state.isAuthenticated = Boolean(state.accessToken && state.user);
+        state.user = null;
+        state.accessToken = "";
+        state.isAuthenticated = false;
+        state.error = action.payload || "";
+        persistSession({
+          user: null,
+          accessToken: "",
+          pendingPhone: state.pendingPhone,
+        });
       })
       .addCase(signupAdmin.pending, (state) => {
         state.status = "loading";

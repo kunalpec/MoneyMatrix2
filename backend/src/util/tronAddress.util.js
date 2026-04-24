@@ -1,4 +1,4 @@
-import TronWeb from "tronweb";
+import { TronWeb } from "tronweb";
 import { ApiError } from "./ApiError.util.js";
 
 // ======== Validate Tron Address (1) ========

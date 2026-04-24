@@ -1,4 +1,5 @@
 import { useAppSelector } from "../app/hooks";
+import { useEffect, useState } from "react";
 import SectionCard from "../components/SectionCard";
 import StatCard from "../components/StatCard";
 import StatusBadge from "../components/StatusBadge";
@@ -8,6 +9,32 @@ export default function DashboardPage() {
   const { totalUsers, livePlayers, liveTotals, currentRound, notices, socketError, timer } =
     useAppSelector((state) => state.admin);
   const leaderboard = useAppSelector((state) => state.admin.leaderboard);
+
+  const [timerProgress, setTimerProgress] = useState(0);
+
+  useEffect(() => {
+    const updateProgress = () => {
+      if (currentRound?.status === "running" && currentRound?.startTime && currentRound?.endTime) {
+        const now = Date.now();
+        const start = new Date(currentRound.startTime).getTime();
+        const end = new Date(currentRound.endTime).getTime();
+        const progress = Math.max(
+          0,
+          Math.min(
+            100,
+            ((end - now) / (end - start)) * 100
+          )
+        );
+        setTimerProgress(progress);
+      } else {
+        setTimerProgress(0);
+      }
+    };
+
+    updateProgress();
+    const interval = setInterval(updateProgress, 1000);
+    return () => clearInterval(interval);
+  }, [currentRound]);
 
   const colorSegments = [
     { label: "Red", value: Number(liveTotals.red || 0), className: "red" },
@@ -25,18 +52,6 @@ export default function DashboardPage() {
   const donutStyle = {
     background: `conic-gradient(#ff6b6b 0deg ${redStop}deg, #39a0ff ${redStop}deg ${blueStop}deg, #9a6cff ${blueStop}deg 360deg)`,
   };
-  const timerProgress =
-    currentRound?.status === "running" && currentRound?.startTime && currentRound?.endTime
-      ? Math.max(
-          0,
-          Math.min(
-            100,
-            ((new Date(currentRound.endTime).getTime() - Date.now()) /
-              (new Date(currentRound.endTime).getTime() - new Date(currentRound.startTime).getTime())) *
-              100
-          )
-        )
-      : 0;
   const leadColor = [...colorSegments].sort((a, b) => b.value - a.value)[0];
   const visibleResult = currentRound?.status === "running" ? "Pending" : currentRound?.result || "Pending";
 

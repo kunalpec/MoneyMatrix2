@@ -20,6 +20,18 @@ import {
   trxToSun,
 } from "../../util/trxAmount.util.js";
 import { assertValidTronAddress } from "../../util/tronAddress.util.js";
+import {
+  ensureWalletAccountingFields,
+  getWalletBalanceSun,
+} from "../../service/payment/walletAccounting.service.js";
+import {
+  reserveWithdrawalTransaction,
+  rollbackReservedWithdrawal,
+} from "../../service/payment/withdrawal.service.js";
+import { enqueueWithdrawalJob } from "../../queue/withdrawal.queue.js";
+import { logger } from "../../util/logger.util.js";
+
+const TRX_CURRENCY = "TRX";
 
 // ======== Get Transak Environment Config (1) ========
 /**
@@ -30,15 +42,22 @@ import { assertValidTronAddress } from "../../util/tronAddress.util.js";
 const getTransakEnvironmentConfig = () => {
   const isDevelopment = process.env.NODE_ENV === "development";
 
-  const hostUrl =
+  const appHostUrl =
     process.env.TRANSAK_HOST_URL ||
     (isDevelopment
-      ? "https://your-ngrok-url.ngrok-free.app"
-      : "https://yourdomain.com");
+      ? "https://delphia-synostotic-fletcher.ngrok-free.dev"
+      : "https://moneymatrixapp.com");
+
+  const configuredReferrerDomain = String(
+    process.env.TRANSAK_REFERRER_DOMAIN || ""
+  )
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/\/+$/, "");
 
   return {
-    hostUrl,
-    referrerDomain: new URL(hostUrl).host,
+    appHostUrl,
+    referrerDomain: configuredReferrerDomain || new URL(appHostUrl).host,
     sessionApiUrl: isDevelopment
       ? "https://api-gateway-stg.transak.com/api/v2/auth/session"
       : "https://api-gateway.transak.com/api/v2/auth/session",
@@ -60,76 +79,57 @@ const createTransakWidgetUrl = async (widgetParams) => {
 
   const { sessionApiUrl } = getTransakEnvironmentConfig();
 
-  const { data } = await axios.post(
-    sessionApiUrl,
-    { widgetParams },
-    {
-      headers: {
-        "access-token": accessToken,
-        "Content-Type": "application/json",
-      },
-    }
-  );
+  let data;
+
+  try {
+    const response = await axios.post(
+      sessionApiUrl,
+      { widgetParams },
+      {
+        headers: {
+          "access-token": accessToken,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    data = response.data;
+  } catch (error) {
+    const statusCode = error?.response?.status || 500;
+    const transakMessage =
+      error?.response?.data?.message ||
+      error?.response?.data?.error?.message ||
+      error?.message ||
+      "Failed to create Transak widget URL";
+
+    const hint =
+      statusCode === 401
+        ? " Check your production Transak API key/secret pairing, whitelisted backend IP, and TRANSAK_REFERRER_DOMAIN."
+        : "";
+
+    throw new ApiError(statusCode, `${transakMessage}${hint}`);
+  }
 
   if (!data?.data?.widgetUrl) {
     throw new ApiError(500, "Failed to generate widget URL");
   }
 
+  console.info("TRANSAK_WIDGET_PARAMS", widgetParams);
+  console.info("TRANSAK_WIDGET_URL", data.data.widgetUrl);
+
   return data.data.widgetUrl;
 };
 
-// ======== Ensure Wallet Accounting Fields (3) ========
-/**
- * Backfill integer accounting fields lazily for older wallet documents.
- * This keeps payment logic safe during rollout without requiring an
- * immediate hard migration before the controller can run.
- */
-const ensureWalletAccountingFields = async (walletOrId, session = null) => {
-  const wallet =
-    typeof walletOrId === "object" && walletOrId?._id
-      ? walletOrId
-      : await Wallet.findById(walletOrId).session(session);
+const getTransakNetwork = (cryptoCurrencyCode) => {
+  const normalizedCryptoCurrencyCode = String(
+    cryptoCurrencyCode || ""
+  ).toUpperCase();
 
-  if (!wallet) {
-    throw new ApiError(404, "Wallet not found");
+  if (normalizedCryptoCurrencyCode === "TRX") {
+    return "tron";
   }
 
-  const update = {};
-
-  if (!Number.isSafeInteger(wallet.balanceSun)) {
-    update.balanceSun = trxToSun(wallet.balance || 0, "Wallet balance");
-  }
-
-  if (!Number.isSafeInteger(wallet.lockedBalanceSun)) {
-    update.lockedBalanceSun = trxToSun(
-      wallet.lockedBalance || 0,
-      "Locked wallet balance"
-    );
-  }
-
-  if (Object.keys(update).length === 0) {
-    return wallet;
-  }
-
-  return Wallet.findByIdAndUpdate(
-    wallet._id,
-    { $set: update },
-    { new: true, session }
-  );
-};
-
-// ======== Get Wallet Balance In SUN (4) ========
-/**
- * Read wallet balance from integer accounting when available.
- * Falling back to the legacy decimal field keeps older data usable
- * while the system transitions to SUN-based accounting.
- */
-const getWalletBalanceSun = (wallet) => {
-  if (Number.isSafeInteger(wallet?.balanceSun)) {
-    return wallet.balanceSun;
-  }
-
-  return trxToSun(wallet?.balance || 0, "Wallet balance");
+  return "mainnet";
 };
 
 // ======== Get Transaction Amount In SUN (5) ========
@@ -203,12 +203,7 @@ export const createOnRampUrl = AsyncHandler(async (req, res) => {
     fiatAmount,
     countryCode = "IN",
     fiatCurrency = "INR",
-    cryptoCurrencyCode = "TRX",
   } = req.body;
-
-  if (!user?.tronAddress) {
-    throw new ApiError(400, "User wallet missing");
-  }
 
   if (!fiatAmount || Number(fiatAmount) <= 0) {
     throw new ApiError(400, "Invalid fiat amount");
@@ -218,6 +213,10 @@ export const createOnRampUrl = AsyncHandler(async (req, res) => {
   const wallet = await Wallet.findOne({ user: user._id });
   if (!wallet) {
     throw new ApiError(404, "Wallet not found");
+  }
+
+  if (!wallet.address) {
+    throw new ApiError(400, "Wallet address missing");
   }
 
   const externalId = crypto.randomUUID();
@@ -232,7 +231,7 @@ export const createOnRampUrl = AsyncHandler(async (req, res) => {
     amount: 0,
     amountSun: 0,
     provider: "TRANSAK",
-    currency: String(cryptoCurrencyCode).toUpperCase(),
+    currency: TRX_CURRENCY,
     metadata: {
       fiatAmount: Number(fiatAmount),
       fiatCurrency: String(fiatCurrency).toUpperCase(),
@@ -241,28 +240,37 @@ export const createOnRampUrl = AsyncHandler(async (req, res) => {
   });
 
   // 3. Create hosted checkout URL
-  const { hostUrl, referrerDomain } = getTransakEnvironmentConfig();
+  const { appHostUrl, referrerDomain } = getTransakEnvironmentConfig();
 
   const widgetParams = {
     apiKey: process.env.TRANSAK_API_KEY,
     productsAvailed: "BUY",
     partnerCustomerId: user._id.toString(),
     partnerOrderId: externalId,
-    cryptoCurrencyCode: String(cryptoCurrencyCode).toUpperCase(),
-    network: "mainnet",
+    cryptoCurrencyCode: TRX_CURRENCY,
+    network: getTransakNetwork(TRX_CURRENCY),
     walletAddress: wallet.address,
     disableWalletAddressForm: true,
+    ...(user?.email
+      ? { email: user.email, isAutoFillUserData: true }
+      : {}),
     fiatCurrency: String(fiatCurrency).toUpperCase(),
     countryCode: String(countryCode).toUpperCase(),
     defaultFiatAmount: Number(fiatAmount),
-    hostURL: hostUrl,
-    redirectURL: `${hostUrl}/api/v1/transak/success`,
+    hostURL: appHostUrl,
+    redirectURL: `${appHostUrl}/api/v1/transak/on-ramp/success`,
     referrerDomain,
   };
 
   const url = await createTransakWidgetUrl(widgetParams);
 
-  return res.json(new ApiResponse(200, { url, orderId: externalId }, "Success"));
+  return res.json(
+    new ApiResponse(
+      200,
+      { url, widgetUrl: url, orderId: externalId },
+      "Success"
+    )
+  );
 });
 
 // ======== Sweep To Admin Wallet (8) ========
@@ -379,7 +387,7 @@ export const executePendingSweep = async (sweepTransactionId) => {
         lastError: null,
       },
     },
-    { new: true }
+    { returnDocument: "after" }
   );
 
   if (!lockedSweep) {
@@ -504,6 +512,63 @@ export const checkAdminTreasuryConsistency = async () => {
   };
 };
 
+const buildTransakOffRampWidgetUrl = async ({
+  user,
+  externalId,
+  amountSun,
+  fiatCurrency,
+  countryCode,
+}) => {
+  const { appHostUrl, referrerDomain } = getTransakEnvironmentConfig();
+
+  return createTransakWidgetUrl({
+    apiKey: process.env.TRANSAK_API_KEY,
+    productsAvailed: "SELL",
+    isBuyOrSell: "SELL",
+    exchangeScreenTitle: "Sell Crypto",
+    hideMenu: true,
+    partnerCustomerId: user._id.toString(),
+    partnerOrderId: externalId,
+    cryptoCurrencyCode: TRX_CURRENCY,
+    network: getTransakNetwork(TRX_CURRENCY),
+    ...(user?.email
+      ? { email: user.email, isAutoFillUserData: true }
+      : {}),
+    defaultCryptoAmount: Number(sunToTrx(amountSun, "Off-ramp amount")),
+    fiatCurrency: String(fiatCurrency).toUpperCase(),
+    countryCode: String(countryCode).toUpperCase(),
+    hostURL: appHostUrl,
+    redirectURL: `${appHostUrl}/api/v1/transak/off-ramp/success`,
+    referrerDomain,
+    walletRedirection: true,
+  });
+};
+
+const resolveUserTronDestinationAddress = async ({
+  user,
+  toAddress,
+  label,
+}) => {
+  if (toAddress) {
+    return assertValidTronAddress(toAddress, label);
+  }
+
+  if (user?.tronAddress) {
+    return assertValidTronAddress(user.tronAddress, label);
+  }
+
+  const wallet = await Wallet.findOne({ user: user._id });
+
+  if (wallet?.address) {
+    return assertValidTronAddress(wallet.address, label);
+  }
+
+  throw new ApiError(
+    400,
+    `Missing ${label}. Create a wallet first or send toAddress explicitly`
+  );
+};
+
 // ======== Withdraw TRX (11) ========
 /**
  * Submit a direct TRX withdrawal.
@@ -511,19 +576,23 @@ export const checkAdminTreasuryConsistency = async () => {
  * on-chain confirmation can be finalized later by the webhook handler.
  */
 export const withdrawTrx = AsyncHandler(async (req, res) => {
-  // 1. Validate request
   const { amount, toAddress } = req.body;
   const user = req.user;
   const amountSun = trxToSun(amount, "Withdraw amount");
+
+  if (user?.role !== "admin" && !user?.isVerified) {
+    throw new ApiError(403, "Please verify your account first");
+  }
 
   if (amountSun <= 0) {
     throw new ApiError(400, "Invalid amount");
   }
 
-  const destinationAddress = assertValidTronAddress(
+  const destinationAddress = await resolveUserTronDestinationAddress({
+    user,
     toAddress,
-    "destination address"
-  );
+    label: "destination address",
+  });
 
   const adminWallet = await ensureWalletAccountingFields(
     await Wallet.findOne({ isAdmin: true })
@@ -541,331 +610,114 @@ export const withdrawTrx = AsyncHandler(async (req, res) => {
     throw new ApiError(400, "Admin insufficient balance");
   }
 
-  // 2. Reserve user balance and create the local withdrawal record
-  const creationSession = await mongoose.startSession();
-  let withdrawalTransaction;
-  let chainSubmitted = false;
-  let submittedTxId = null;
+  const withdrawalTransaction = await reserveWithdrawalTransaction({
+    user,
+    amountSun,
+    destinationAddress,
+    provider: "TATUM",
+    currency: TRX_CURRENCY,
+    status: "PENDING",
+    deductUserBalance: user.role !== "admin",
+    metadata: {
+      queue: "withdrawal",
+      requestedAt: new Date(),
+    },
+  });
 
   try {
-    await creationSession.withTransaction(async () => {
-      if (user.role !== "admin") {
-        const userWallet = await ensureWalletAccountingFields(
-          await Wallet.findOne({ user: user._id }).session(creationSession),
-          creationSession
-        );
+    const job = await enqueueWithdrawalJob(withdrawalTransaction._id.toString());
 
-        if (!userWallet) {
-          throw new ApiError(404, "Wallet not found");
-        }
-
-        const updatedWallet = await Wallet.findOneAndUpdate(
-          {
-            _id: userWallet._id,
-            balanceSun: { $gte: amountSun },
-          },
-          {
-            $inc: buildBalanceIncrementFromSun(-amountSun),
-          },
-          { new: true, session: creationSession }
-        );
-
-        if (!updatedWallet) {
-          throw new ApiError(400, "Insufficient balance");
-        }
+    await Transaction.updateOne(
+      { _id: withdrawalTransaction._id, processed: false },
+      {
+        $set: {
+          "metadata.queueJobId": job.id,
+          "metadata.queueName": "trx-withdrawals",
+        },
       }
+    );
 
-      [withdrawalTransaction] = await Transaction.create(
-        [
-          {
-            userId: user._id,
-            type: "WITHDRAW",
-            ...buildAmountFieldsFromSun(amountSun),
-            status: "PROCESSING",
-            processed: false,
-            toAddress: destinationAddress,
-            provider: "TATUM",
-            currency: "TRX",
-          },
-        ],
-        { session: creationSession }
-      );
+    logger.info("withdrawal.api.accepted", {
+      transactionId: withdrawalTransaction._id.toString(),
+      userId: user._id.toString(),
+      amountSun,
+      destinationAddress,
+      jobId: job.id,
     });
-  } finally {
-    await creationSession.endSession();
-  }
-
-  try {
-    // 3. Submit blockchain transaction
-    const mnemonic = decrypt(adminWallet.mnemonic);
-    const privateKey = derivePrivateKeyFromMnemonic(mnemonic);
-
-    const response = await tatumClient.post("/tron/transaction", {
-      to: destinationAddress,
-      amount: sunToTrx(amountSun).toString(),
-      fromPrivateKey: privateKey,
-    });
-
-    chainSubmitted = true;
-    submittedTxId = response.data.txId;
-
-    // 4. Persist chain txId and treasury debit, but do not mark success yet.
-    // Final success is reserved for webhook confirmation.
-    const finalizeSession = await mongoose.startSession();
-
-    try {
-      await finalizeSession.withTransaction(async () => {
-        const updatedTransaction = await Transaction.findOneAndUpdate(
-          {
-            _id: withdrawalTransaction._id,
-            processed: false,
-            status: "PROCESSING",
-          },
-          {
-            $set: {
-              txId: submittedTxId,
-              status: "PROCESSING",
-              lastError: null,
-            },
-          },
-          { new: true, session: finalizeSession }
-        );
-
-        if (!updatedTransaction) {
-          throw new ApiError(
-            409,
-            "Withdrawal transaction not available for txId update"
-          );
-        }
-
-        const adminWalletInSession = await ensureWalletAccountingFields(
-          adminWallet._id,
-          finalizeSession
-        );
-
-        const debitedAdminWallet = await Wallet.findOneAndUpdate(
-          {
-            _id: adminWalletInSession._id,
-            balanceSun: { $gte: amountSun },
-          },
-          { $inc: buildBalanceIncrementFromSun(-amountSun) },
-          { new: true, session: finalizeSession }
-        );
-
-        if (!debitedAdminWallet) {
-          throw new ApiError(
-            409,
-            "Admin balance changed before withdrawal finalization"
-          );
-        }
-      });
-    } finally {
-      await finalizeSession.endSession();
-    }
 
     return res.json(
-      new ApiResponse(200, { txId: submittedTxId }, "Withdrawal submitted")
+      new ApiResponse(
+        202,
+        {
+          transactionId: withdrawalTransaction._id,
+          status: "PENDING",
+        },
+        "Withdrawal queued for processing"
+      )
     );
   } catch (error) {
-    // 5. If the chain submission already happened, do not mark the transaction
-    // as failed and do not refund the user. The safe fallback is to keep it in
-    // PROCESSING until webhook confirmation or manual recovery.
-    if (chainSubmitted) {
-      console.error("WITHDRAW_DB_FINALIZATION_FAILED_AFTER_CHAIN_SUBMISSION", {
-        transactionId: withdrawalTransaction?._id?.toString?.(),
-        txId: submittedTxId,
-        error: error?.message,
-      });
+    await rollbackReservedWithdrawal({
+      user,
+      amountSun,
+      transactionFilter: { _id: withdrawalTransaction._id },
+      error,
+      refundUserBalance: user.role !== "admin",
+    });
 
-      await Transaction.updateOne(
-        { _id: withdrawalTransaction._id, processed: false },
-        {
-          $set: {
-            txId: submittedTxId,
-            status: "PROCESSING",
-            lastError: error?.response?.data?.message || error.message,
-          },
-        }
-      );
-
-      return res.json(
-        new ApiResponse(
-          200,
-          { txId: submittedTxId },
-          "Withdrawal submitted and awaiting webhook confirmation"
-        )
-      );
-    }
-
-    // 6. Only before chain submission is it safe to roll back local state.
-    const rollbackSession = await mongoose.startSession();
-
-    try {
-      await rollbackSession.withTransaction(async () => {
-        if (user.role !== "admin") {
-          const userWallet = await ensureWalletAccountingFields(
-            await Wallet.findOne({ user: user._id }).session(rollbackSession),
-            rollbackSession
-          );
-
-          await Wallet.updateOne(
-            { _id: userWallet._id },
-            { $inc: buildBalanceIncrementFromSun(amountSun) },
-            { session: rollbackSession }
-          );
-        }
-
-        await Transaction.updateOne(
-          { _id: withdrawalTransaction._id, processed: false },
-          {
-            $set: {
-              status: "FAILED",
-              processed: true,
-              processedAt: new Date(),
-              lastError: error?.response?.data?.message || error.message,
-            },
-          },
-          { session: rollbackSession }
-        );
-      });
-    } finally {
-      await rollbackSession.endSession();
-    }
-
-    throw new ApiError(500, "Withdraw failed");
+    throw new ApiError(
+      503,
+      error?.response?.data?.message ||
+        error?.message ||
+        "Withdrawal queue unavailable"
+    );
   }
 });
 
-// ======== Create Off Ramp URL (12) ========
-/**
- * Create a Transak sell session and reserve the user's internal balance first.
- * The balance reservation and local transaction creation happen before the
- * redirect so failures can be rolled back deterministically.
- */
 export const createOffRampUrl = AsyncHandler(async (req, res) => {
-  // 1. Validate request
   const user = req.user;
+
+  if (!user?._id) {
+    throw new ApiError(401, "Unauthorized");
+  }
+
   const {
     amount,
     fiatCurrency = "INR",
     countryCode = "IN",
-    cryptoCurrencyCode = "TRX",
   } = req.body;
-
   const amountSun = trxToSun(amount, "Off-ramp amount");
 
-  if (amountSun <= 0) {
+  if (!amountSun || amountSun <= 0) {
     throw new ApiError(400, "Invalid amount");
   }
 
-  // 2. Reserve user balance and create a local pending withdrawal
-  const session = await mongoose.startSession();
-  let externalId = crypto.randomUUID();
+  const externalId = crypto.randomUUID();
+  const normalizedFiatCurrency = String(fiatCurrency).toUpperCase();
+  const normalizedCountryCode = String(countryCode).toUpperCase();
 
   try {
-    await session.withTransaction(async () => {
-      const wallet = await ensureWalletAccountingFields(
-        await Wallet.findOne({ user: user._id }).session(session),
-        session
-      );
-
-      if (!wallet) {
-        throw new ApiError(404, "Wallet not found");
-      }
-
-      const updatedWallet = await Wallet.findOneAndUpdate(
-        {
-          _id: wallet._id,
-          balanceSun: { $gte: amountSun },
-        },
-        {
-          $inc: buildBalanceIncrementFromSun(-amountSun),
-        },
-        { new: true, session }
-      );
-
-      if (!updatedWallet) {
-        throw new ApiError(400, "Insufficient balance");
-      }
-
-      await Transaction.create(
-        [
-          {
-            userId: user._id,
-            type: "WITHDRAW",
-            ...buildAmountFieldsFromSun(amountSun),
-            externalId,
-            status: "PENDING",
-            processed: false,
-            provider: "TRANSAK",
-            currency: String(cryptoCurrencyCode).toUpperCase(),
-          },
-        ],
-        { session }
-      );
+    const url = await buildTransakOffRampWidgetUrl({
+      user,
+      externalId,
+      amountSun,
+      fiatCurrency: normalizedFiatCurrency,
+      countryCode: normalizedCountryCode,
     });
-  } finally {
-    await session.endSession();
-  }
 
-  try {
-    // 3. Create hosted off-ramp widget
-    const { hostUrl, referrerDomain } = getTransakEnvironmentConfig();
-
-    const widgetParams = {
-      apiKey: process.env.TRANSAK_API_KEY,
-      productsAvailed: "SELL",
-      partnerCustomerId: user._id.toString(),
-      partnerOrderId: externalId,
-      cryptoCurrencyCode: String(cryptoCurrencyCode).toUpperCase(),
-      network: "mainnet",
-      walletAddress: user.tronAddress,
-      cryptoAmount: sunToTrx(amountSun).toString(),
-      fiatCurrency: String(fiatCurrency).toUpperCase(),
-      countryCode: String(countryCode).toUpperCase(),
-      hostURL: hostUrl,
-      redirectURL: `${hostUrl}/offramp-success`,
-      referrerDomain,
-    };
-
-    const url = await createTransakWidgetUrl(widgetParams);
-
-    return res.json(new ApiResponse(200, { url, orderId: externalId }));
-  } catch (error) {
-    // 4. If widget creation fails, roll back the reserved balance and mark
-    // the local withdrawal as failed so the user is not stuck.
-    const rollbackSession = await mongoose.startSession();
-
-    try {
-      await rollbackSession.withTransaction(async () => {
-        const wallet = await ensureWalletAccountingFields(
-          await Wallet.findOne({ user: user._id }).session(rollbackSession),
-          rollbackSession
-        );
-
-        await Wallet.updateOne(
-          { _id: wallet._id },
-          { $inc: buildBalanceIncrementFromSun(amountSun) },
-          { session: rollbackSession }
-        );
-
-        await Transaction.updateOne(
-          { externalId, processed: false },
-          {
-            $set: {
-              status: "FAILED",
-              processed: true,
-              processedAt: new Date(),
-              lastError: error.message,
-            },
-          },
-          { session: rollbackSession }
-        );
-      });
-    } finally {
-      await rollbackSession.endSession();
+    if (!url) {
+      throw new ApiError(500, "Failed to create Transak URL");
     }
 
+    return res.json(
+      new ApiResponse(200, {
+        url,
+        widgetUrl: url,
+        orderId: externalId,
+        note:
+          "This only opens the external Transak sell flow. It does not withdraw or reserve in-game TRX.",
+      })
+    );
+  } catch (error) {
     throw error;
   }
 });

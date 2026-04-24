@@ -3,12 +3,13 @@ import {
   getPlatformUsers,
   getLeaderboard,
 } from "../controller/admin.controller.js";
-import { verifyJWT } from "../middleware/auth.middleware.js";
+import { requireRole, verifyJWT } from "../middleware/auth.middleware.js";
 
 const router = Router();
 
-// Protect all admin routes with JWT verification
 router.use(verifyJWT);
+router.use(requireRole("admin"));
+
 router.get("/users", getPlatformUsers);
 router.get("/leaderboard", getLeaderboard);
 

@@ -1,6 +1,10 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api/v1";
+const API_BASE =
+  import.meta.env.VITE_API_URL ||
+  import.meta.env.VITE_API_BASE_URL ||
+  "http://localhost:5000/api/v1";
 
 let refreshPromise = null;
+const inFlightGetRequests = new Map();
 
 export class ApiClientError extends Error {
   constructor(message, statusCode, payload) {
@@ -76,36 +80,55 @@ export const apiRequest = async (
   path,
   { method = "GET", body, token, headers = {}, retryAuth = true, onAccessToken } = {}
 ) => {
-  const response = await fetch(`${API_BASE}${path}`, {
-    method,
-    headers: buildHeaders(token, headers),
-    credentials: "include",
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  const normalizedMethod = method.toUpperCase();
+  const requestKey =
+    normalizedMethod === "GET" ? `${normalizedMethod}:${path}:${token || ""}` : null;
 
-  const payload = await safeParseJson(response);
+  if (requestKey && inFlightGetRequests.has(requestKey)) {
+    return inFlightGetRequests.get(requestKey);
+  }
 
-  if (response.status === 401 && retryAuth) {
-    const refreshedToken = await refreshAccessTokenRequest(onAccessToken);
-    return apiRequest(path, {
-      method,
-      body,
-      token: refreshedToken,
-      headers,
-      retryAuth: false,
-      onAccessToken,
+  const requestPromise = (async () => {
+    const response = await fetch(`${API_BASE}${path}`, {
+      method: normalizedMethod,
+      headers: buildHeaders(token, headers),
+      credentials: "include",
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+
+    const payload = await safeParseJson(response);
+
+    if (response.status === 401 && retryAuth) {
+      const refreshedToken = await refreshAccessTokenRequest(onAccessToken);
+      return apiRequest(path, {
+        method: normalizedMethod,
+        body,
+        token: refreshedToken,
+        headers,
+        retryAuth: false,
+        onAccessToken,
+      });
+    }
+
+    if (!response.ok) {
+      throw new ApiClientError(
+        payload?.message || "Request failed",
+        response.status,
+        payload
+      );
+    }
+
+    return payload;
+  })();
+
+  if (requestKey) {
+    inFlightGetRequests.set(requestKey, requestPromise);
+    requestPromise.finally(() => {
+      inFlightGetRequests.delete(requestKey);
     });
   }
 
-  if (!response.ok) {
-    throw new ApiClientError(
-      payload?.message || "Request failed",
-      response.status,
-      payload
-    );
-  }
-
-  return payload;
+  return requestPromise;
 };
 
 export const getApiBase = () => API_BASE;

@@ -3,7 +3,10 @@ import dotenv from "dotenv";
 dotenv.config();
 
 // ✅ safe fallback
-const rawOrigins = process.env.CORS_ORIGINS || "http://localhost:5173";
+const rawOrigins =
+  process.env.CORS_ORIGINS ||
+  process.env.CLIENT_URL ||
+  "http://localhost:5173";
 
 // Array of Allowed clients
 const allowedOrigins = rawOrigins

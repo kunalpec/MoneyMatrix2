@@ -2,38 +2,46 @@ import jwt from "jsonwebtoken";
 import { User } from "../model/user.model.js";
 import { ApiError } from "../util/ApiError.util.js";
 
+const getSocketToken = (socket) => {
+  const authToken = socket.handshake.auth?.token;
+  const header = socket.handshake.headers?.authorization;
+
+  if (authToken) {
+    return authToken;
+  }
+
+  if (header?.startsWith("Bearer ")) {
+    return header.split(" ")[1];
+  }
+
+  return null;
+};
+
 export const socketAuthMiddleware = async (socket, next) => {
   try {
-    // 🔐 get token
-    const token =
-      socket.handshake.auth?.token ||
-      socket.handshake.headers?.authorization?.split(" ")[1];
-    console.log("Socket Auth Token:", token); // Debug log
+    const token = getSocketToken(socket);
+
     if (!token) {
-      return next(new ApiError(401, "Token missing"));
+      return next(new ApiError(401, "Socket token missing"));
     }
 
-    // ✅ verify token
-    let decoded;
-    try {
-      decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
-    } catch (err) {
-      return next(new ApiError(401, "Invalid token"));
+    const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
+
+    if (!decoded?._id) {
+      return next(new ApiError(401, "Invalid socket token"));
     }
 
-    // 🔍 find user
-    const user = await User.findById(decoded._id).select("-password");
+    const user = await User.findById(decoded._id).select(
+      "-password -refreshToken"
+    );
 
     if (!user) {
-      return next(new ApiError(404, "User not found"));
+      return next(new ApiError(401, "Socket user not found"));
     }
 
-    // 💾 attach user
     socket.user = user;
-    console.log("Socket User:", user); // Debug log
-
-    next(); // ✅ success
+    return next();
   } catch (error) {
-    return next(new ApiError(500, "Socket authentication failed"));
+    return next(new ApiError(401, "Socket authentication failed"));
   }
 };

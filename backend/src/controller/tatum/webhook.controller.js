@@ -13,8 +13,16 @@ import {
   buildBalanceIncrementFromSun,
   trxToSun,
 } from "../../util/trxAmount.util.js";
+import {
+  ensureWalletAccountingFields,
+} from "../../service/payment/walletAccounting.service.js";
+import {
+  getTransactionAmountSun,
+  processConfirmedDeposit,
+  validateTatumDepositPayload,
+} from "../../service/payment/deposit.service.js";
+import { logger } from "../../util/logger.util.js";
 
-// ======== Webhook Constants (1) ========
 const MAX_WEBHOOK_RETRIES = Number(process.env.WEBHOOK_MAX_RETRIES || 5);
 const MIN_TRON_CONFIRMATIONS = Number(process.env.MIN_TRON_CONFIRMATIONS || 1);
 
@@ -28,35 +36,155 @@ const TRANSAK_FAILED_EVENTS = new Set([
   "FAILED",
   "ORDER_FAILED",
   "CANCELLED",
+  "CANCELED",
 ]);
 
-// ======== Retryable Write Conflict Check (2) ========
+const compactObject = (value) =>
+  Object.fromEntries(
+    Object.entries(value).filter(([, fieldValue]) => fieldValue !== undefined)
+  );
+
+const normalizeStatus = (value) => String(value || "").trim().toUpperCase();
+
 const isRetryableWriteConflict = (error) =>
   /write conflict|transienttransactionerror|unknowntransactioncommitresult|duplicate key/i.test(
     error?.message || ""
   );
 
-// ======== Parse Currency (3) ========
 const parseCurrency = (data = {}) =>
   data.cryptoCurrencyCode ||
+  data.crypto_currency_code ||
   data.cryptoCurrency ||
+  data.crypto_currency ||
   data.cryptoTicker ||
+  data.crypto_ticker ||
   "TRX";
 
-// ======== Parse Provider TxId (4) ========
+const parseTransakProduct = (data = {}) =>
+  String(data.isBuyOrSell || data.product || "").trim().toUpperCase();
+
 const parseProviderTxId = (data = {}) =>
-  data.transactionHash || data.cryptoTransactionHash || data.txId || null;
+  data.transactionHash ||
+  data.transaction_hash ||
+  data.cryptoTransactionHash ||
+  data.crypto_transaction_hash ||
+  data.txId ||
+  data.tx_id ||
+  null;
+
+const parsePartnerOrderId = (data = {}) =>
+  data.partnerOrderId || data.partner_order_id || null;
+
+const parseTransakOrderId = (data = {}) =>
+  data.orderId ||
+  data.orderID ||
+  data.order_id ||
+  data.id ||
+  data.cardPaymentData?.orderId ||
+  null;
+
+const buildTransakMetadata = (data = {}) =>
+  compactObject({
+    provider: "TRANSAK",
+    orderId: parseTransakOrderId(data),
+    partnerOrderId: parsePartnerOrderId(data),
+    status: data.status,
+    product: data.isBuyOrSell,
+    network: data.network,
+    walletAddress: data.walletAddress,
+    fiatCurrency: data.fiatCurrency,
+    fiatAmount: data.fiatAmount,
+    amountPaid: data.amountPaid,
+    cryptoCurrency: parseCurrency(data),
+    cryptoAmount: data.cryptoAmount || data.crypto_amount,
+    totalFeeInFiat: data.totalFeeInFiat,
+    countryCode: data.countryCode,
+    paymentOptionId: data.paymentOptionId,
+    quoteId: data.quoteId,
+    transactionHash: parseProviderTxId(data),
+    transactionLink: data.transactionLink,
+    completedAt: data.completedAt,
+    updatedAt: data.updatedAt,
+  });
+
+const buildTatumMetadata = (body = {}) =>
+  compactObject({
+    provider: "TATUM",
+    subscriptionType: body.subscriptionType,
+    network: body.network,
+    asset: body.asset || body.currency,
+    txId: body.txId || body.tx_id || body.transactionHash || body.transaction_hash,
+    address: body.address || body.to || body.recipient || body.walletAddress,
+    counterAddress: body.counterAddress,
+    amount: body.amount,
+    confirmations: body.confirmations ?? body.confirmationCount,
+    blockNumber: body.blockNumber,
+    timestamp: body.timestamp,
+  });
+
+const buildTransakTransactionFilter = ({ partnerOrderId, transakOrderId }) => {
+  const filters = [];
+
+  if (partnerOrderId) {
+    filters.push({ externalId: partnerOrderId });
+  }
+
+  if (transakOrderId) {
+    filters.push(
+      { externalId: transakOrderId },
+      { providerOrderId: transakOrderId }
+    );
+  }
+
+  if (filters.length === 1) {
+    return filters[0];
+  }
+
+  return { $or: filters };
+};
 
 // ======== Normalize Webhook Payload (5) ========
 const getPayload = (body = {}) => {
-  if (body?.eventType && body?.data) {
-    return { eventType: body.eventType, data: body.data };
+  if (body?.eventType && body?.data && !Array.isArray(body.data)) {
+    return { eventType: normalizeStatus(body.eventType), data: body.data };
   }
 
-  const webhookData = body?.data?.[0]?.webhookData || {};
+  const firstDataItem = Array.isArray(body?.data) ? body.data[0] : null;
+  const webhookData = firstDataItem?.webhookData || body?.webhookData || {};
+  const eventType =
+    body?.meta?.eventID ||
+    body?.meta?.eventId ||
+    firstDataItem?.eventID ||
+    firstDataItem?.eventId ||
+    webhookData?.eventID ||
+    webhookData?.eventId ||
+    webhookData?.status ||
+    body?.eventID ||
+    body?.eventId ||
+    body?.status ||
+    null;
+
   return {
-    eventType: webhookData?.status || body?.status || null,
-    data: webhookData,
+    eventType: normalizeStatus(eventType),
+    data: {
+      ...webhookData,
+      partnerOrderId:
+        webhookData?.partnerOrderId ||
+        webhookData?.partner_order_id ||
+        firstDataItem?.partnerOrderId ||
+        firstDataItem?.partner_order_id ||
+        body?.partnerOrderId ||
+        body?.partner_order_id,
+      orderId:
+        webhookData?.orderId ||
+        webhookData?.orderID ||
+        webhookData?.order_id ||
+        webhookData?.id ||
+        body?.meta?.orderID ||
+        body?.meta?.orderId ||
+        body?.meta?.order_id,
+      providerWebhookId: firstDataItem?.id || body?.id || body?.webhookId,
+    },
   };
 };
 
@@ -64,22 +192,47 @@ const getPayload = (body = {}) => {
 const getAmountSun = (data = {}) => {
   const rawAmount =
     data.cryptoAmount ||
+    data.crypto_amount ||
     data.cryptoCurrencyAmount ||
+    data.crypto_currency_amount ||
     data.totalAmount ||
+    data.total_amount ||
     data.amount ||
     0;
 
   return trxToSun(rawAmount, "Webhook amount");
 };
 
+const validateTransakWebhookPayload = ({ eventType, data = {} }) => {
+  const normalizedEventType = normalizeStatus(eventType);
+
+  if (!normalizedEventType) {
+    throw new ApiError(400, "Missing Transak event type");
+  }
+
+  if (!parsePartnerOrderId(data) && !parseTransakOrderId(data)) {
+    throw new ApiError(400, "Missing Transak order identifier");
+  }
+};
+
 // ======== Parse Webhook Event Id (7) ========
 const parseWebhookEventId = (provider, req, data = {}) => {
   if (provider === "TRANSAK") {
+    const metaOrderId =
+      req.body?.meta?.orderID ||
+      req.body?.meta?.orderId ||
+      req.body?.meta?.order_id;
+    const metaEventId = req.body?.meta?.eventID || req.body?.meta?.eventId;
+
     return (
       req.headers["x-transak-event-id"] ||
       data.eventId ||
+      data.eventID ||
       data.webhookId ||
+      data.providerWebhookId ||
       req.body?.eventId ||
+      req.body?.eventID ||
+      (metaOrderId && metaEventId ? `${metaOrderId}:${metaEventId}` : null) ||
       null
     );
   }
@@ -139,6 +292,10 @@ const verifyTransakSignature = (req) => {
     }
 
   } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+
     // Handles invalid hex / buffer issues
     throw new ApiError(401, "Invalid Transak signature format");
   }
@@ -146,12 +303,43 @@ const verifyTransakSignature = (req) => {
 
 // ======== Verify Tatum Secret (9) ========
 const verifyTatum = (req) => {
+  const hmacSecret = process.env.TATUM_WEBHOOK_HMAC_SECRET;
+  const payloadHashHeader = req.headers["x-payload-hash"];
+
+  if (hmacSecret && payloadHashHeader) {
+    const payload = req.rawBody || JSON.stringify(req.body || {});
+    const expectedHash = crypto
+      .createHmac("sha512", hmacSecret)
+      .update(payload, "utf8")
+      .digest("base64");
+
+    const providedHash = String(
+      Array.isArray(payloadHashHeader)
+        ? payloadHashHeader[0]
+        : payloadHashHeader
+    ).trim();
+
+    const expectedBuffer = Buffer.from(expectedHash, "utf8");
+    const providedBuffer = Buffer.from(providedHash, "utf8");
+
+    if (
+      expectedBuffer.length === providedBuffer.length &&
+      crypto.timingSafeEqual(expectedBuffer, providedBuffer)
+    ) {
+      return;
+    }
+
+    throw new ApiError(401, "Invalid Tatum webhook HMAC");
+  }
+
   const secret = process.env.TATUM_WEBHOOK_SECRET;
   const header = req.headers["x-tatum-webhook-secret"];
 
-  if (!secret || !header || header !== secret) {
-    throw new ApiError(401, "Invalid Tatum webhook");
+  if (secret && header && header === secret) {
+    return;
   }
+
+  throw new ApiError(401, "Invalid Tatum webhook");
 };
 
 // ======== Create Webhook Event (10) ========
@@ -200,7 +388,7 @@ const startWebhookProcessing = async (eventId) =>
         error: null,
       },
     },
-    { new: true }
+    { returnDocument: "after" }
   );
 
 // ======== Finalize Webhook Event (12) ========
@@ -266,46 +454,6 @@ const incrementTransactionRetry = async (filter, errorMessage) => {
   await tx.save();
 };
 
-// ======== Ensure Wallet Accounting Fields (16) ========
-const ensureWalletAccountingFields = async (walletOrId, session = null) => {
-  const wallet =
-    typeof walletOrId === "object" && walletOrId?._id
-      ? walletOrId
-      : await Wallet.findById(walletOrId).session(session);
-
-  if (!wallet) {
-    throw new ApiError(404, "Wallet not found");
-  }
-
-  const update = {};
-
-  if (!Number.isSafeInteger(wallet.balanceSun)) {
-    update.balanceSun = trxToSun(wallet.balance || 0, "Wallet balance");
-  }
-
-  if (!Number.isSafeInteger(wallet.lockedBalanceSun)) {
-    update.lockedBalanceSun = trxToSun(
-      wallet.lockedBalance || 0,
-      "Locked wallet balance"
-    );
-  }
-
-  if (Object.keys(update).length === 0) {
-    return wallet;
-  }
-
-  return Wallet.findByIdAndUpdate(wallet._id, { $set: update }, { new: true, session });
-};
-
-// ======== Get Transaction Amount In SUN (17) ========
-const getTransactionAmountSun = (transaction) => {
-  if (Number.isSafeInteger(transaction?.amountSun)) {
-    return transaction.amountSun;
-  }
-
-  return trxToSun(transaction?.amount || 0, "Transaction amount");
-};
-
 // ======== Lock Transaction (18) ========
 const lockTransaction = async ({ filter, session }) =>
   Transaction.findOneAndUpdate(
@@ -323,71 +471,21 @@ const lockTransaction = async ({ filter, session }) =>
       },
     },
     {
-      new: true,
+      returnDocument: "after",
       sort: { createdAt: 1 },
       session,
     }
   );
-
-// ======== Create Sweep Placeholder (19) ========
-const createSweepPlaceholder = async ({
-  session,
-  wallet,
-  amountSun,
-  sourceTxId,
-}) => {
-  if (wallet.isAdmin) {
-    return null;
-  }
-
-  const adminWallet = await ensureWalletAccountingFields(
-    await Wallet.findOne({ isAdmin: true }).session(session),
-    session
-  );
-
-  const networkFeeSun = trxToSun(process.env.TRON_FEE || 1, "TRON_FEE");
-  const sweepAmountSun = amountSun - networkFeeSun;
-
-  if (sweepAmountSun <= 0) {
-    return null;
-  }
-
-  const existingSweep = await Transaction.findOne({
-    type: "SWEEP",
-    externalId: `SWEEP:${sourceTxId}`,
-  }).session(session);
-
-  if (existingSweep) {
-    return existingSweep._id;
-  }
-
-  const [sweepTx] = await Transaction.create(
-    [
-      {
-        userId: wallet.user,
-        type: "SWEEP",
-        ...buildAmountFieldsFromSun(sweepAmountSun),
-        provider: "TATUM",
-        currency: "TRX",
-        fromAddress: wallet.address,
-        toAddress: adminWallet.address,
-        externalId: `SWEEP:${sourceTxId}`,
-        status: "PENDING",
-        processed: false,
-      },
-    ],
-    { session }
-  );
-
-  return sweepTx._id;
-};
 
 // ======== Transak Webhook Handler (20) ========
 export const transakWebhook = AsyncHandler(async (req, res) => {
   verifyTransakSignature(req);
 
   const { eventType, data } = getPayload(req.body);
-  const orderId = data?.partnerOrderId || data?.orderId || null;
+  validateTransakWebhookPayload({ eventType, data });
+  const partnerOrderId = parsePartnerOrderId(data);
+  const transakOrderId = parseTransakOrderId(data);
+  const orderId = partnerOrderId || transakOrderId;
   const providerTxId = parseProviderTxId(data);
   const eventId = parseWebhookEventId("TRANSAK", req, data);
 
@@ -404,6 +502,12 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
     return res.json(new ApiResponse(200, { orderId }, "Webhook already processed"));
   }
 
+  logger.info("webhook.transak.received", {
+    eventType,
+    orderId,
+    providerTxId,
+  });
+
   const processingEvent = await startWebhookProcessing(webhookEvent._id);
   if (!processingEvent) {
     return res.json(new ApiResponse(200, { orderId }, "Webhook already processing"));
@@ -415,19 +519,26 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
     throw error;
   }
 
+  const transactionFilter = buildTransakTransactionFilter({
+    partnerOrderId,
+    transakOrderId,
+  });
+  const product = parseTransakProduct(data);
+
   try {
     if (
       !TRANSAK_SUCCESS_EVENTS.has(eventType) &&
       !TRANSAK_FAILED_EVENTS.has(eventType)
     ) {
       await Transaction.updateOne(
-        { externalId: orderId },
+        transactionFilter,
         {
           $set: {
-            metadata: data,
+            metadata: buildTransakMetadata(data),
             provider: "TRANSAK",
             currency: parseCurrency(data),
             txId: providerTxId || undefined,
+            ...(transakOrderId ? { providerOrderId: transakOrderId } : {}),
           },
         }
       );
@@ -445,11 +556,30 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
 
     try {
       await session.withTransaction(async () => {
-        const existingTx = await Transaction.findOne({ externalId: orderId }).session(
-          session
-        );
+        let existingTx = await Transaction.findOne(transactionFilter)
+          .sort({ createdAt: 1 })
+          .session(session);
+
+        if (!existingTx && data?.walletAddress) {
+          existingTx = await Transaction.findOne({
+            type: TRANSAK_SUCCESS_EVENTS.has(eventType)
+              ? "DEPOSIT"
+              : { $in: ["DEPOSIT", "WITHDRAW"] },
+            provider: "TRANSAK",
+            toAddress: data.walletAddress,
+            processed: false,
+            status: { $in: ["PENDING", "PROCESSING"] },
+          })
+            .sort({ createdAt: 1 })
+            .session(session);
+        }
 
         if (!existingTx) {
+          if (product === "SELL") {
+            responseMessage = "Off-ramp webhook recorded";
+            return;
+          }
+
           throw new ApiError(404, "Transaction not found");
         }
 
@@ -461,7 +591,6 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
         const lockedTx = await lockTransaction({
           filter: {
             _id: existingTx._id,
-            externalId: orderId,
           },
           session,
         });
@@ -477,12 +606,15 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
         }
 
         const commonUpdate = {
-          metadata: data,
+          metadata: buildTransakMetadata(data),
           provider: "TRANSAK",
           currency: parseCurrency(data),
           txId: providerTxId || lockedTx.txId,
           lockedAt: null,
           lastError: null,
+          ...(transakOrderId || lockedTx.providerOrderId
+            ? { providerOrderId: transakOrderId || lockedTx.providerOrderId }
+            : {}),
         };
 
         if (TRANSAK_SUCCESS_EVENTS.has(eventType)) {
@@ -575,7 +707,7 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
 
     await markWebhookFailure(webhookEvent._id, error);
     await incrementTransactionRetry(
-      { externalId: orderId },
+      transactionFilter,
       error?.message || "Transak webhook failed"
     );
     throw error;
@@ -585,14 +717,34 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
 // ======== Tron Deposit Webhook Handler (21) ========
 export const tronWebhook = AsyncHandler(async (req, res) => {
   verifyTatum(req);
+  validateTatumDepositPayload(req.body);
 
-  const txId = req.body?.txId || req.body?.transactionHash || null;
-  const providerExternalId = req.body?.externalId || null;
-  const address = req.body?.address || req.body?.to || req.body?.recipient || null;
+  const txId =
+    req.body?.txId ||
+    req.body?.tx_id ||
+    req.body?.transactionHash ||
+    req.body?.transaction_hash ||
+    null;
+  const providerExternalId =
+    req.body?.externalId ||
+    req.body?.external_id ||
+    req.body?.partnerOrderId ||
+    req.body?.partner_order_id ||
+    null;
+  const address =
+    req.body?.address ||
+    req.body?.to ||
+    req.body?.recipient ||
+    req.body?.walletAddress ||
+    req.body?.wallet_address ||
+    null;
   const rawAmount = req.body?.amount;
   const confirmations = Number(
     req.body?.confirmations ?? req.body?.confirmationCount ?? 0
   );
+  const currency = String(
+    req.body?.asset || req.body?.currency || "TRX"
+  ).toUpperCase();
   const eventId = parseWebhookEventId("TATUM", req);
 
   const { event: webhookEvent, isDuplicate } = await createWebhookEvent({
@@ -607,6 +759,12 @@ export const tronWebhook = AsyncHandler(async (req, res) => {
   if (isDuplicate && webhookEvent?.processed) {
     return res.json(new ApiResponse(200, { txId }, "Webhook already processed"));
   }
+
+  logger.info("webhook.tatum.deposit.received", {
+    txId,
+    address,
+    confirmations,
+  });
 
   const processingEvent = await startWebhookProcessing(webhookEvent._id);
   if (!processingEvent) {
@@ -652,163 +810,42 @@ export const tronWebhook = AsyncHandler(async (req, res) => {
     return res.json(new ApiResponse(200, { txId }, "Already processed"));
   }
 
-  let sweepTxId = null;
-  let responseMessage = "Deposit processed";
-
   try {
-    const session = await mongoose.startSession();
-
-    try {
-      await session.withTransaction(async () => {
-        let existingTx = null;
-
-        if (providerExternalId) {
-          existingTx = await Transaction.findOne({
-            type: "DEPOSIT",
-            externalId: providerExternalId,
-          }).session(session);
-        } else {
-          existingTx = await Transaction.findOne({
-            type: "DEPOSIT",
-            txId,
-          }).session(session);
-        }
-
-        if (!existingTx && !providerExternalId) {
-          const wallet = await ensureWalletAccountingFields(
-            await Wallet.findOne({ address }).session(session),
-            session
-          );
-
-          [existingTx] = await Transaction.create(
-            [
-              {
-                userId: wallet.user,
-                type: "DEPOSIT",
-                ...buildAmountFieldsFromSun(amountSun),
-                provider: "TATUM",
-                currency: "TRX",
-                txId,
-                toAddress: address,
-                status: "PROCESSING",
-                processed: false,
-                metadata: req.body,
-              },
-            ],
-            { session }
-          );
-        }
-
-        if (!existingTx) {
-          throw new ApiError(404, "Deposit transaction not found");
-        }
-
-        if (existingTx.processed) {
-          responseMessage = "Already processed";
-          return;
-        }
-
-        const duplicateTxId = await Transaction.findOne({
-          type: "DEPOSIT",
-          txId,
-          processed: true,
-          status: "SUCCESS",
-        }).session(session);
-
-        if (duplicateTxId) {
-          responseMessage = "Already processed";
-          return;
-        }
-
-        const lockedTx = await lockTransaction({
-          filter: {
-            _id: existingTx._id,
-            type: "DEPOSIT",
-            ...(providerExternalId ? { externalId: providerExternalId } : { txId }),
-          },
-          session,
-        });
-
-        if (!lockedTx) {
-          responseMessage = "Already processed";
-          return;
-        }
-
-        if (lockedTx.processed) {
-          responseMessage = "Already processed";
-          return;
-        }
-
-        if (lockedTx.txId && lockedTx.txId !== txId) {
-          throw new ApiError(409, "Deposit txId mismatch for externalId");
-        }
-
-        if (lockedTx.toAddress && lockedTx.toAddress !== address) {
-          throw new ApiError(409, "Deposit address mismatch for externalId");
-        }
-
-        const wallet = await ensureWalletAccountingFields(
-          await Wallet.findOne({ address: lockedTx.toAddress || address }).session(
-            session
-          ),
-          session
-        );
-
-        await Wallet.updateOne(
-          { _id: wallet._id },
-          { $inc: buildBalanceIncrementFromSun(amountSun) },
-          { session }
-        );
-
-        await Transaction.updateOne(
-          { _id: lockedTx._id, processed: false, status: "LOCKED" },
-          {
-            $set: {
-              ...buildAmountFieldsFromSun(amountSun),
-              provider: "TATUM",
-              currency: "TRX",
-              txId,
-              externalId: providerExternalId,
-              toAddress: lockedTx.toAddress || address,
-              status: "SUCCESS",
-              processed: true,
-              processedAt: new Date(),
-              confirmedAt: new Date(),
-              completedAt: new Date(),
-              lockedAt: null,
-              lastError: null,
-              metadata: req.body,
-            },
-          },
-          { session }
-        );
-
-        // The deposit is finalized first. Sweep creation is recorded separately
-        // so a sweep failure never reverses or hides a real user deposit.
-        sweepTxId = await createSweepPlaceholder({
-          session,
-          wallet,
-          amountSun,
-          sourceTxId: txId,
-        });
-      });
-    } finally {
-      await session.endSession();
-    }
+    const result = await processConfirmedDeposit({
+      provider: "TATUM",
+      txHash: txId,
+      address,
+      amountSun,
+      providerExternalId,
+      currency,
+      payload: buildTatumMetadata(req.body),
+      source: "WEBHOOK",
+    });
 
     await markWebhookSuccess(webhookEvent._id);
 
-    if (sweepTxId) {
-      executePendingSweep(sweepTxId).catch((error) => {
+    if (result.sweepTxId) {
+      executePendingSweep(result.sweepTxId).catch((error) => {
         console.error("Sweep execution failed:", error.message);
       });
     }
 
+    logger.info("webhook.tatum.deposit.accepted", {
+      txId,
+      address,
+      amountSun,
+      responseMessage: result.responseMessage,
+    });
+
     return res.json(
       new ApiResponse(
         200,
-        { txId, externalId: providerExternalId, sweepScheduled: Boolean(sweepTxId) },
-        responseMessage
+        {
+          txId,
+          externalId: providerExternalId,
+          sweepScheduled: Boolean(result.sweepTxId),
+        },
+        result.responseMessage
       )
     );
   } catch (error) {

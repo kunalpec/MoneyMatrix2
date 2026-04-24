@@ -101,9 +101,21 @@ const generateTransakAccessToken = async () => {
 
     return response.data?.data || {};
   } catch (error) {
+    const statusCode = error?.response?.status || 500;
+    const transakMessage =
+      error?.response?.data?.message ||
+      error?.response?.data?.error?.message ||
+      error?.message ||
+      "Failed to fetch Transak token";
+
+    const hint =
+      statusCode === 401
+        ? " Verify that TRANSAK_API_KEY and TRANSAK_API_SECRET belong to the same Production environment."
+        : "";
+
     throw new ApiError(
-      error?.response?.status || 500,
-      error?.response?.data?.message || "Failed to fetch Transak token"
+      statusCode,
+      `${transakMessage}${hint}`
     );
   }
 };

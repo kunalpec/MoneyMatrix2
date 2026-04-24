@@ -1,5 +1,20 @@
 import mongoose from "mongoose";
 
+const SUN_PER_TRX = 1_000_000;
+
+const toSun = (trx) => Math.round(Number(trx) * SUN_PER_TRX);
+const fromSun = (sun) => Number(sun) / SUN_PER_TRX;
+
+const assertPositiveSunAmount = (amount, label) => {
+  const sun = toSun(amount);
+
+  if (!Number.isSafeInteger(sun) || sun <= 0) {
+    throw new Error(`Invalid ${label}`);
+  }
+
+  return sun;
+};
+
 const walletSchema = new mongoose.Schema(
   {
     user: {
@@ -9,56 +24,47 @@ const walletSchema = new mongoose.Schema(
       unique: true,
       index: true,
     },
-
-    balance: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
-    balanceSun: {
+    trxBalanceSun: {
       type: Number,
       default: 0,
       min: 0,
       validate: {
         validator: Number.isInteger,
-        message: "balanceSun must be an integer",
+        message: "trxBalanceSun must be an integer",
       },
     },
-
-    // 🔒 optional: lock balance during bets
-    lockedBalance: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
-    lockedBalanceSun: {
+    trxLockedBalanceSun: {
       type: Number,
       default: 0,
       min: 0,
       validate: {
         validator: Number.isInteger,
-        message: "lockedBalanceSun must be an integer",
+        message: "trxLockedBalanceSun must be an integer",
       },
     },
-
-    address:{
-        type: String,
-        required: true,
-        unique: true,
-        index: true,
+    address: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
     },
-    xpub:{
-        type: String,
-        required: true,
-        unique: true,
+    depositSubscriptionId: {
+      type: String,
+      default: null,
+      index: true,
     },
-    mnemonic:{
-        type: String,
-        default: null,
+    xpub: {
+      type: String,
+      required: true,
+      unique: true,
     },
-    index:{
-        type: Number,
-        required: true,
+    mnemonic: {
+      type: String,
+      default: null,
+    },
+    index: {
+      type: Number,
+      required: true,
     },
     signatureId: {
       type: String,
@@ -79,61 +85,82 @@ const walletSchema = new mongoose.Schema(
       default: false,
     },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
+  }
 );
 
+walletSchema.virtual("trxBalance").get(function () {
+  return fromSun(this.trxBalanceSun || 0);
+});
 
-// 💰 Credit (add money)
+walletSchema.virtual("trxLockedBalance").get(function () {
+  return fromSun(this.trxLockedBalanceSun || 0);
+});
+
 walletSchema.methods.credit = function (amount) {
-  this.balance += amount;
-  this.balanceSun += Math.round(amount * 1_000_000);
+  const amountSun = assertPositiveSunAmount(amount, "credit amount");
+  this.trxBalanceSun += amountSun;
+  return this;
 };
 
-
-// 💸 Debit (place bet)
 walletSchema.methods.debit = function (amount) {
-  if (this.balance < amount) {
-    throw new Error("Insufficient balance");
-  }
-  this.balance -= amount;
-  this.balanceSun -= Math.round(amount * 1_000_000);
-};
+  const amountSun = assertPositiveSunAmount(amount, "debit amount");
 
-
-// 🔐 Lock balance (when bet placed but not settled)
-walletSchema.methods.lockAmount = function (amount) {
-  if (this.balance < amount) {
+  if (this.trxBalanceSun < amountSun) {
     throw new Error("Insufficient balance");
   }
 
-  this.balance -= amount;
-  this.balanceSun -= Math.round(amount * 1_000_000);
-  this.lockedBalance += amount;
-  this.lockedBalanceSun += Math.round(amount * 1_000_000);
+  this.trxBalanceSun -= amountSun;
+  return this;
 };
 
+walletSchema.methods.lock = function (amount) {
+  const amountSun = assertPositiveSunAmount(amount, "bet amount");
 
-// 🔓 Unlock + settle win
-walletSchema.methods.settleWin = function (betAmount, winAmount,io,userSocket) {
-  this.lockedBalance -= betAmount;
-  this.lockedBalanceSun -= Math.round(betAmount * 1_000_000);
-  this.balance += winAmount;
-  this.balanceSun += Math.round(winAmount * 1_000_000);
-  // Optional: Emit real-time update to user about wallet change
-  if (io && userSocket) {
-    io.to(userSocket).emit("wallet-update", {
-      balance: this.balance,
-      lockedBalance: this.lockedBalance,
-    });
+  if (this.trxBalanceSun < amountSun) {
+    throw new Error("Insufficient balance");
   }
+
+  this.trxBalanceSun -= amountSun;
+  this.trxLockedBalanceSun += amountSun;
+  return this;
 };
 
+walletSchema.methods.settleWin = function (betAmount, winAmount) {
+  const betAmountSun = assertPositiveSunAmount(
+    betAmount,
+    "bet settlement amount"
+  );
+  const winAmountSun = toSun(winAmount);
 
-// ❌ Unlock (lost bet)
+  if (!Number.isSafeInteger(winAmountSun) || winAmountSun < 0) {
+    throw new Error("Invalid win amount");
+  }
+
+  if (this.trxLockedBalanceSun < betAmountSun) {
+    throw new Error("Locked balance is insufficient for settlement");
+  }
+
+  this.trxLockedBalanceSun -= betAmountSun;
+  this.trxBalanceSun += winAmountSun;
+  return this;
+};
+
 walletSchema.methods.settleLoss = function (amount) {
-  this.lockedBalance -= amount;
-  this.lockedBalanceSun -= Math.round(amount * 1_000_000);
-};
+  const amountSun = assertPositiveSunAmount(
+    amount,
+    "loss settlement amount"
+  );
 
+  if (this.trxLockedBalanceSun < amountSun) {
+    throw new Error("Locked balance is insufficient for settlement");
+  }
+
+  this.trxLockedBalanceSun -= amountSun;
+  return this;
+};
 
 export const Wallet = mongoose.model("Wallet", walletSchema);

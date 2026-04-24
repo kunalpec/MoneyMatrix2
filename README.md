@@ -131,6 +131,11 @@ Main route groups:
 - `/ramp`
 - `/admin`
 - `/webhook`
+- `/transak`
+
+Full frontend-facing API documentation:
+
+- [backend/API_README.md](./backend/API_README.md)
 
 ## Important Routes
 
@@ -152,7 +157,7 @@ Main route groups:
 
 ### Ramp
 
-- `GET /api/v1/ramp/on-ramp`
+- `POST /api/v1/ramp/on-ramp`
 - `POST /api/v1/ramp/off-ramp`
 - `POST /api/v1/ramp/withdraw`
 

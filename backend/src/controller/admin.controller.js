@@ -41,8 +41,14 @@ export const getPlatformUsers = AsyncHandler(async (req, res) => {
         phone: 1,
         tronAddress: 1,
         createdAt: 1,
-        balance: { $ifNull: ["$walletData.balance", 0] },
-        lockedBalance: { $ifNull: ["$walletData.lockedBalance", 0] },
+        trxBalanceSun: { $ifNull: ["$walletData.trxBalanceSun", 0] },
+        trxLockedBalanceSun: { $ifNull: ["$walletData.trxLockedBalanceSun", 0] },
+        trxBalance: {
+          $divide: [{ $ifNull: ["$walletData.trxBalanceSun", 0] }, 1_000_000],
+        },
+        trxLockedBalance: {
+          $divide: [{ $ifNull: ["$walletData.trxLockedBalanceSun", 0] }, 1_000_000],
+        },
         // If they have a refresh token, they have an active login session
         isLoggedIn: { $cond: [{ $ifNull: ["$refreshToken", false] }, true, false] },
       },
@@ -59,7 +65,7 @@ export const getPlatformUsers = AsyncHandler(async (req, res) => {
   return res.status(200).json(
     new ApiResponse(200, {
       totalUsers: usersWithLiveStatus.length,
-      livePlayers: activeSocketUserIds.length,
+      livePlayers: usersWithLiveStatus.filter((user) => user.isCurrentlyPlaying).length,
       users: usersWithLiveStatus,
     }, "Platform users fetched successfully")
   );

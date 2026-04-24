@@ -68,8 +68,7 @@ export const buildBalanceIncrementFromSun = (value) => {
   }
 
   return {
-    balanceSun: amountSun,
-    balance: amountSun / SUN_PER_TRX,
+    trxBalanceSun: amountSun,
   };
 };
 
@@ -82,7 +81,6 @@ export const buildLockedBalanceIncrementFromSun = (value) => {
   }
 
   return {
-    lockedBalanceSun: amountSun,
-    lockedBalance: amountSun / SUN_PER_TRX,
+    trxLockedBalanceSun: amountSun,
   };
 };

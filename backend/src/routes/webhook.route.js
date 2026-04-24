@@ -7,18 +7,12 @@ import {
 
 const router = Router();
 
-/**
- * ⚠️ Do NOT add verifyJWT here. 
- * Webhooks are called by external servers (Tatum/Transak) and use signature headers for security.
- */
 router.post("/tatum/deposit", tronWebhook);
+router.post("/tatum/address", tronWebhook);
 router.post("/tatum/withdraw", tronWithdrawWebhook);
 
-// // Explicit Transak webhook routes for order status updates.
-// router.post("/transak/deposit", transakWebhook);
-// router.post("/transak/withdraw", transakWebhook);
-
-// Backward-compatible alias for existing Transak webhook integrations.
 router.post("/transak", transakWebhook);
+router.post("/transak/deposit", transakWebhook);
+router.post("/transak/withdraw", transakWebhook);
 
 export default router;
