@@ -3,6 +3,7 @@ import { ApiError } from "../../util/ApiError.util.js";
 import { trxToSun } from "../../util/trxAmount.util.js";
 
 export const ensureWalletAccountingFields = async (walletOrId, session = null) => {
+
   const wallet =
     typeof walletOrId === "object" && walletOrId?._id
       ? walletOrId

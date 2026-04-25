@@ -8,6 +8,8 @@
     "build": "echo 'No build step required for plain JS backend'",
     "migrate:wallet-accounting": "node src/scripts/migrateWalletAccounting.js",
     "migrate:wallet-subscriptions": "node src/scripts/backfillWalletSubscriptions.js",
+    "webhooks:tatum-hmac": "node src/scripts/configureTatumWebhookHmac.js",
+    "webhooks:tatum-admin-refresh": "node src/scripts/refreshAdminWebhookSubscription.js",
     "kms:admin": "node src/scripts/configureAdminKms.js",
     "admin:wallet": "node src/scripts/ensureAdminWallet.js",
     "payments:check": "node src/scripts/checkPaymentReadiness.js"

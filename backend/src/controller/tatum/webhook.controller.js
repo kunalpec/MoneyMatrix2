@@ -7,7 +7,7 @@ import { AsyncHandler } from "../../util/AsyncHandler.util.js";
 import { ApiError } from "../../util/ApiError.util.js";
 import { ApiResponse } from "../../util/ApiResponse.util.js";
 import { executePendingSweep } from "./ramp.controller.js";
-import { getTransakSignatureCandidates, getTransakWebhookSecret } from "./transak.controller.js";
+import { getVerifiedTransakWebhookPayload } from "./transak.controller.js";
 import {
   buildAmountFieldsFromSun,
   buildBalanceIncrementFromSun,
@@ -22,6 +22,7 @@ import {
   validateTatumDepositPayload,
 } from "../../service/payment/deposit.service.js";
 import { logger } from "../../util/logger.util.js";
+import { verifyTatumHMAC } from "../../middleware/rawBody.middleware.js";
 
 const MAX_WEBHOOK_RETRIES = Number(process.env.WEBHOOK_MAX_RETRIES || 5);
 const MIN_TRON_CONFIRMATIONS = Number(process.env.MIN_TRON_CONFIRMATIONS || 1);
@@ -110,7 +111,13 @@ const buildTransakMetadata = (data = {}) =>
 const buildTatumMetadata = (body = {}) =>
   compactObject({
     provider: "TATUM",
+    subscriptionId:
+      body.subscriptionId ||
+      body.subscriptionID ||
+      body.subscription?.id ||
+      null,
     subscriptionType: body.subscriptionType,
+    chain: body.chain,
     network: body.network,
     asset: body.asset || body.currency,
     txId: body.txId || body.tx_id || body.transactionHash || body.transaction_hash,
@@ -248,6 +255,11 @@ const parseWebhookEventId = (provider, req, data = {}) => {
 // ======== Verify Transak Signature (8) ========
 // ======== Verify Transak Signature (FINAL FIXED) ========
 const verifyTransakSignature = (req) => {
+  throw new ApiError(
+    410,
+    "Legacy Transak HMAC verification is disabled. Use JWT webhook verification instead."
+  );
+
   const signatureHeader = req.headers["x-transak-signature"];
   const secret = getTransakWebhookSecret();
 
@@ -301,45 +313,23 @@ const verifyTransakSignature = (req) => {
   }
 };
 
-// ======== Verify Tatum Secret (9) ========
+// ======== Verify Tatum Secret (9) ==========================================================================
 const verifyTatum = (req) => {
   const hmacSecret = process.env.TATUM_WEBHOOK_HMAC_SECRET;
-  const payloadHashHeader = req.headers["x-payload-hash"];
 
-  if (hmacSecret && payloadHashHeader) {
-    const payload = req.rawBody || JSON.stringify(req.body || {});
-    const expectedHash = crypto
-      .createHmac("sha512", hmacSecret)
-      .update(payload, "utf8")
-      .digest("base64");
-
-    const providedHash = String(
-      Array.isArray(payloadHashHeader)
-        ? payloadHashHeader[0]
-        : payloadHashHeader
-    ).trim();
-
-    const expectedBuffer = Buffer.from(expectedHash, "utf8");
-    const providedBuffer = Buffer.from(providedHash, "utf8");
-
-    if (
-      expectedBuffer.length === providedBuffer.length &&
-      crypto.timingSafeEqual(expectedBuffer, providedBuffer)
-    ) {
-      return;
-    }
-
-    throw new ApiError(401, "Invalid Tatum webhook HMAC");
+  if (!hmacSecret) {
+    throw new ApiError(500, "TATUM_WEBHOOK_HMAC_SECRET is not configured");
   }
 
-  const secret = process.env.TATUM_WEBHOOK_SECRET;
-  const header = req.headers["x-tatum-webhook-secret"];
+  if (!req.headers["x-payload-hash"]) {
+    throw new ApiError(401, "Missing Tatum webhook HMAC header");
+  }
 
-  if (secret && header && header === secret) {
+  if (verifyTatumHMAC(req, hmacSecret)) {
     return;
   }
 
-  throw new ApiError(401, "Invalid Tatum webhook");
+  throw new ApiError(401, "Invalid Tatum webhook HMAC");
 };
 
 // ======== Create Webhook Event (10) ========
@@ -479,15 +469,26 @@ const lockTransaction = async ({ filter, session }) =>
 
 // ======== Transak Webhook Handler (20) ========
 export const transakWebhook = AsyncHandler(async (req, res) => {
-  verifyTransakSignature(req);
-
-  const { eventType, data } = getPayload(req.body);
+  const {
+    eventType,
+    data,
+    decodedPayload,
+    verificationMethod,
+  } = await getVerifiedTransakWebhookPayload(req);
   validateTransakWebhookPayload({ eventType, data });
   const partnerOrderId = parsePartnerOrderId(data);
   const transakOrderId = parseTransakOrderId(data);
   const orderId = partnerOrderId || transakOrderId;
   const providerTxId = parseProviderTxId(data);
-  const eventId = parseWebhookEventId("TRANSAK", req, data);
+  const eventId =
+    req.headers["x-transak-event-id"] ||
+    decodedPayload?.eventId ||
+    decodedPayload?.eventID ||
+    data?.eventId ||
+    data?.eventID ||
+    req.body?.eventId ||
+    req.body?.eventID ||
+    (orderId && eventType ? `${orderId}:${eventType}` : null);
 
   const { event: webhookEvent, isDuplicate } = await createWebhookEvent({
     provider: "TRANSAK",
@@ -506,6 +507,7 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
     eventType,
     orderId,
     providerTxId,
+    verificationMethod,
   });
 
   const processingEvent = await startWebhookProcessing(webhookEvent._id);
@@ -714,30 +716,81 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
   }
 });
 
-// ======== Tron Deposit Webhook Handler (21) ========
-export const tronWebhook = AsyncHandler(async (req, res) => {
+const parseTatumTxId = (body = {}) =>
+  body.txId || body.tx_id || body.transactionHash || body.transaction_hash || null;
+
+const parseTatumAddress = (body = {}) =>
+  body.address ||
+  body.to ||
+  body.recipient ||
+  body.walletAddress ||
+  body.wallet_address ||
+  null;
+
+const parseTatumIncomingFlag = (body = {}) => {
+  if (typeof body.incoming === "boolean") {
+    return body.incoming;
+  }
+
+  if (typeof body.incoming === "string") {
+    const normalized = body.incoming.trim().toLowerCase();
+    if (normalized === "true") {
+      return true;
+    }
+    if (normalized === "false") {
+      return false;
+    }
+  }
+
+  const subscriptionType = String(body.subscriptionType || "").trim().toUpperCase();
+
+  if (subscriptionType.startsWith("INCOMING_")) {
+    return true;
+  }
+
+  if (subscriptionType.startsWith("OUTGOING_")) {
+    return false;
+  }
+
+  return null;
+};
+
+const resolveTatumWebhookDirection = async (body = {}) => {
+  const incoming = parseTatumIncomingFlag(body);
+  if (incoming !== null) {
+    return incoming ? "DEPOSIT" : "WITHDRAW";
+  }
+
+  const txId = parseTatumTxId(body);
+  if (txId) {
+    const matchingWithdrawal = await Transaction.findOne({
+      txId,
+      type: "WITHDRAW",
+    })
+      .select({ _id: 1 })
+      .lean();
+
+    if (matchingWithdrawal) {
+      return "WITHDRAW";
+    }
+  }
+
+  return "DEPOSIT";
+};
+
+// ======== Handle Tatum Deposit Webhook (21) ========
+const handleTatumDepositWebhook = async (req, res) => {
   verifyTatum(req);
   validateTatumDepositPayload(req.body);
 
-  const txId =
-    req.body?.txId ||
-    req.body?.tx_id ||
-    req.body?.transactionHash ||
-    req.body?.transaction_hash ||
-    null;
+  const txId = parseTatumTxId(req.body);
   const providerExternalId =
     req.body?.externalId ||
     req.body?.external_id ||
     req.body?.partnerOrderId ||
     req.body?.partner_order_id ||
     null;
-  const address =
-    req.body?.address ||
-    req.body?.to ||
-    req.body?.recipient ||
-    req.body?.walletAddress ||
-    req.body?.wallet_address ||
-    null;
+  const address = parseTatumAddress(req.body);
   const rawAmount = req.body?.amount;
   const confirmations = Number(
     req.body?.confirmations ?? req.body?.confirmationCount ?? 0
@@ -867,13 +920,13 @@ export const tronWebhook = AsyncHandler(async (req, res) => {
     );
     throw error;
   }
-});
+};
 
-// ======== Tron Withdraw Webhook Handler (22) ========
-export const tronWithdrawWebhook = AsyncHandler(async (req, res) => {
+// ======== Handle Tatum Withdraw Webhook (22) ========
+const handleTatumWithdrawWebhook = async (req, res) => {
   verifyTatum(req);
 
-  const txId = req.body?.txId || req.body?.transactionHash || null;
+  const txId = parseTatumTxId(req.body);
   const eventId = parseWebhookEventId("TATUM", req);
 
   const { event: webhookEvent, isDuplicate } = await createWebhookEvent({
@@ -976,4 +1029,37 @@ export const tronWithdrawWebhook = AsyncHandler(async (req, res) => {
     );
     throw error;
   }
+};
+
+// ======== Tron Address Webhook Handler (23) ========
+export const tronWebhook = AsyncHandler(async (req, res) => {
+  // -------------------------------------------------------------------------------
+  req.body = {
+    "currency": "TRON",
+    "address": "TJv25FCA2bwLeJHs8op1duVkWkucGyswPF",
+    "blockNumber": 739301,
+    "counterAddress": "TABC123xyz",
+    "txId": "27c8f9a1b2c3d4e5f6789012345678901234567890a3ctef",
+    "chain": "TRON",
+    "subscriptionType": "INCOMING_NATIVE_TX",
+    "amount": "10.5"
+  }
+  console.log("📩 Tatum webhook received:", req.body);
+  const txId = parseTatumTxId(req.body);
+  const address = parseTatumAddress(req.body);
+  const direction = await resolveTatumWebhookDirection(req.body);
+
+  logger.info("webhook.tatum.address.received", {
+    txId,
+    address,
+    incoming: parseTatumIncomingFlag(req.body),
+    subscriptionType: req.body?.subscriptionType || null,
+    direction,
+  });
+
+  if (direction === "WITHDRAW") {
+    return handleTatumWithdrawWebhook(req, res);
+  }
+
+  return handleTatumDepositWebhook(req, res);
 });

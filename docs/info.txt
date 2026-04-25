@@ -2,3 +2,125 @@
   "signatureId": "aa43fa62-3873-429b-84c5-c271538a00c0",
   "xpub": "xpub6DycnprcwHt2dhrnk6VFMQWSDgvKerE7E5ccnU2iR3utJfpDAXNeotiCzx4g2KV4qercGycJRijXXAybmAhT1Gmd4R2d1pwnm7DWwMcrMGo" 
 }
+
+docker run --rm `
+>>   -e TATUM_API_KEY=t-69c26a31564f048dcf4dd20b-fe8d76bd0bec41c7af7f4bb7 ` 
+>>   -e TATUM_KMS_PASSWORD=kunal@123 `
+>>   -v C:\Users\DELL\Desktop\moneyMatrix2\backend\.tatumrc:/root/.tatumrc `
+>>   tatumio/tatum-kms generatemanagedwallet TRON
+
+docker exec -it tatum-kms tatum-kms generatemanagedwallet TRON
+
+
+// registe tatum webhook
+
+curl -X POST "https://api.tatum.io/v4/subscription" `
+  -H "Content-Type: application/json" `
+  -H "x-api-key: t-69c26a31564f048dcf4dd20b-6cdd1e9bf928477d834021b7" `
+  -d '{
+    "type": "ADDRESS_TRANSACTION",
+    "attr": {
+      "address": "TDNRjEdj9uueCVnFxaVuhvzQYREJ1Yv5GU",
+      "chain": "TRX",
+      "url": "https://delphia-synostotic-fletcher.ngrok-free.dev/api/v1/webhook/tatum/address"
+    },
+    "secret": "d0ce2d892bf8824d931d1dad0c4c654afdc0d0b1803a9d6a4e8e0cb7e4092e6a"
+  }'
+
+
+C:\Users\DELL\Desktop\moneyMatrix2\backend>npm run payments:check     
+
+> backend@1.0.0 payments:check
+> node src/scripts/checkPaymentReadiness.js
+
+[dotenv@17.3.1] injecting env (45) from .env -- tip: ⚙️  write to custom object with { processEnv: myObject }
+MongoDB Connected: ac-htdgxwr-shard-00-00.kv5gcsy.mongodb.net
+{
+  "ok": true,
+  "runtimeValid": true,
+  "runtimeError": null,
+  "runtimeWarnings": [
+    "NODE_ENV is not production",
+    "PUBLIC_WEBHOOK_BASE_URL points to a dev-only host",
+    "BACKEND_PUBLIC_URL points to a dev-only host",
+    "TRANSAK_HOST_URL points to a dev-only host"
+  ],
+  "adminWallet": {
+    "id": "69eb4d5fc4a0c7d97423d361",
+    "user": "69eb4c8f8654ae16eedb1396",
+    "address": "TDNRjEdj9uueCVnFxaVuhvzQYREJ1Yv5GU",
+    "signatureId": null,
+    "signerProvider": null,
+    "configuredAddressMatches": true,
+    "dbTrxBalanceSun": 0,
+    "dbTrxBalanceTrx": 0
+  },
+  "configuredAdminAddress": "TDNRjEdj9uueCVnFxaVuhvzQYREJ1Yv5GU",
+  "chainAccount": null,
+  "chainLookupError": "Authentication required. Make sure your requests are authenticated with a valid Tatum API key. Find out how at: https://co.tatum.io/docs_authentication. If you don't have one, get one for FREE via the Tatum Dashboard at https://co.tatum.io/signup.",
+  "checks": {
+    "adminWalletExists": true,
+    "adminWalletAddressMatchesEnv": true,
+    "adminWalletHasSigner": true,
+    "runtimeSafeForProduction": true,
+    "adminHasPositiveDbBalance": false,
+    "adminHasPositiveChainBalance": false
+  }
+}
+
+C:\Users\DELL\Desktop\moneyMatrix2\backend>
+
+{"success":true,"message":"Webhook registered successfully","data":{"id":"69ec94a608e1905919d15395"}}
+
+
+
+npm run webhooks:tatum-admin-refresh
+{
+"success": true,
+"address": "TJv25FCA2bwLeJHs8op1duVkWkucGyswPF",
+"previousSubscriptionId": "69ec934f74e52338bf5ef9ca",
+"subscriptionId": "69ec9902e90e10ca724e4308",
+"webhookUrl": "https://delphia-synostotic-fletcher.ngrok-free.dev/api/v1/webhook/tatum/address",
+"subscriptionType": "INCOMING_NATIVE_TX",
+"chain": "TRON"
+}
+
+C:\Users\DELL\Desktop\moneyMatrix2\backend>npm run admin:wallet                            
+
+> backend@1.0.0 admin:wallet
+> node src/scripts/ensureAdminWallet.js
+
+[dotenv@17.3.1] injecting env (46) from .env -- tip: ⚙️  write to custom object with { processEnv: myObject }
+MongoDB Connected: ac-htdgxwr-shard-00-00.kv5gcsy.mongodb.net
+{
+  "success": true,
+  "adminUserId": "69eb4c8f8654ae16eedb1396",
+  "walletId": "69ec935072e63bb8b6432d34",
+  "address": "TJv25FCA2bwLeJHs8op1duVkWkucGyswPF",
+  "isAdmin": true,
+  "signatureId": "aa43fa62-3873-429b-84c5-c271538a00c0",
+  "signerProvider": "TATUM_KMS",
+  "signerRef": "admin-tron-wallet"
+}
+
+📩 Tatum webhook received: {
+  currency: 'TRON',
+  address: 'T...',
+  blockNumber: 231522,
+  counterAddress: 'T...',
+  txId: '27c...',
+  chain: 'tron-testnet',
+  subscriptionType: 'INCOMING_NATIVE_TX',
+  amount: '0.000241500000147'
+}
+
+
+# TATUM (HMAC verified)
+curl -X POST "https://delphia-synostotic-fletcher.ngrok-free.dev/api/v1/webhook/tatum/address" \
+-H "Content-Type: application/json" \
+-d '{"currency":"TRON","address":"TJv25FCA2bwLeJHs8op1duVkWkucGyswPF","txId":"test123","chain":"TRON","amount":"10"}'
+
+# TRANSAK (JWT verified)
+curl -X POST "https://delphia-synostotic-fletcher.ngrok-free.dev/api/v1/webhook/transak" \
+-H "Content-Type: application/json" \
+-d '{"data":"your_real_jwt","eventID":"ORDER_COMPLETED","webhookData":{"id":"ord_123","status":"COMPLETED","cryptoAmount":"10","cryptoCurrency":"USDT","walletAddress":"TJv25FCA2bwLeJHs8op1duVkWkucGyswPF"}}'

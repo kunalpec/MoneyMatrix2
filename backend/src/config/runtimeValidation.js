@@ -37,6 +37,11 @@ const looksUnsafeUrl = (value) => {
 
 const isHttpsUrl = (value) => /^https:\/\//i.test(normalizeEnvValue(value));
 
+const hasRealEnvValue = (name) => {
+  const value = normalizeEnvValue(process.env[name]);
+  return Boolean(value) && !looksLikePlaceholder(value);
+};
+
 const assertRequiredEnv = (name, { allowPlaceholder = false } = {}) => {
   const value = normalizeEnvValue(process.env[name]);
 
@@ -66,10 +71,7 @@ export const assertRuntimeConfiguration = () => {
   assertRequiredEnv("REFRESH_TOKEN_SECRET");
   assertRequiredEnv("MENEMONIC_ENCRYPTION_KEY");
   assertRequiredEnv("TATUM_API_KEY");
-  assertRequiredEnv("TATUM_WEBHOOK_SECRET");
-  assertRequiredEnv("TRANSAK_API_KEY");
-  assertRequiredEnv("TRANSAK_API_SECRET");
-  assertRequiredEnv("TRANSAK_WEBHOOK_SECRET");
+  assertRequiredEnv("TATUM_WEBHOOK_HMAC_SECRET");
   assertRequiredEnv("PUBLIC_WEBHOOK_BASE_URL");
   assertRequiredEnv("BACKEND_PUBLIC_URL");
   assertRequiredEnv("CORS_ORIGINS");
@@ -92,6 +94,9 @@ export const assertRuntimeConfiguration = () => {
   if (nodeEnv !== PRODUCTION) {
     return;
   }
+
+  assertRequiredEnv("TRANSAK_API_KEY");
+  assertRequiredEnv("TRANSAK_API_SECRET");
 
   const productionUrls = [
     "PUBLIC_WEBHOOK_BASE_URL",
@@ -130,6 +135,20 @@ export const assertRuntimeConfiguration = () => {
       "TRANSAK_REFERRER_DOMAIN must be a production domain only, without protocol"
     );
   }
+
+  const allowMnemonicSignerInProduction = normalizeEnvValue(
+    process.env.ALLOW_MNEMONIC_SIGNER_IN_PRODUCTION || "false"
+  ).toLowerCase();
+
+  if (
+    allowMnemonicSignerInProduction !== "true" &&
+    !hasRealEnvValue("TATUM_TRON_ADMIN_SIGNATURE_ID")
+  ) {
+    throw new ApiError(
+      500,
+      "TATUM_TRON_ADMIN_SIGNATURE_ID is required in production unless ALLOW_MNEMONIC_SIGNER_IN_PRODUCTION=true"
+    );
+  }
 };
 
 export const getRuntimeWarnings = () => {
@@ -152,6 +171,14 @@ export const getRuntimeWarnings = () => {
     warnings.push("TRANSAK_HOST_URL points to a dev-only host");
   }
 
+  if (!hasRealEnvValue("TRANSAK_API_KEY")) {
+    warnings.push("TRANSAK_API_KEY is missing or still a placeholder");
+  }
+
+  if (!hasRealEnvValue("TRANSAK_API_SECRET")) {
+    warnings.push("TRANSAK_API_SECRET is missing or still a placeholder");
+  }
+
   const transferMode = normalizeEnvValue(
     process.env.TATUM_TRON_TRANSFER_MODE || process.env.TRON_TRANSFER_MODE
   ).toUpperCase();
@@ -159,6 +186,17 @@ export const getRuntimeWarnings = () => {
   if (!transferMode) {
     warnings.push(
       "TATUM_TRON_TRANSFER_MODE is not set; defaulting to TRX transfers unless a tokenAddress is sent explicitly"
+    );
+  }
+
+  if (
+    nodeEnv === PRODUCTION &&
+    !hasRealEnvValue("TATUM_TRON_ADMIN_SIGNATURE_ID") &&
+    normalizeEnvValue(process.env.ALLOW_MNEMONIC_SIGNER_IN_PRODUCTION || "false")
+      .toLowerCase() !== "true"
+  ) {
+    warnings.push(
+      "Production signer is not pinned to Tatum KMS because TATUM_TRON_ADMIN_SIGNATURE_ID is missing"
     );
   }
 

@@ -3,11 +3,22 @@ import {
   getTransakAccessToken,
   getTransakWebhookSignature,
 } from "../controller/tatum/transak.controller.js";
+import { requireRole, verifyJWT } from "../middleware/auth.middleware.js";
 
 const router = express.Router();
 
-router.post("/signature", getTransakWebhookSignature);
-router.get("/token", getTransakAccessToken);
+const escapeHtml = (value) =>
+  String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+const ensureAdmin = [verifyJWT, requireRole("admin")];
+
+router.post("/signature", ...ensureAdmin, getTransakWebhookSignature);
+router.get("/token", ...ensureAdmin, getTransakAccessToken);
 
 const firstValue = (...values) =>
   values.find((value) => value !== undefined && value !== null && value !== "");
@@ -38,15 +49,28 @@ const renderTransakSuccessPage = (flowLabel) => async (req, res, next) => {
 
   try {
     const metadata = buildSuccessMetadata(req.query, flowLabel);
+    const escapedFlowLabel = escapeHtml(flowLabel);
+    const escapedStatus = escapeHtml(status || "PENDING");
+    const escapedOrderId = escapeHtml(firstValue(orderId, order_id) || "-");
+    const escapedPartnerOrderId = escapeHtml(
+      firstValue(partnerOrderId, partner_order_id) || "-"
+    );
+    const escapedCryptoAmount = escapeHtml(
+      firstValue(cryptoAmount, crypto_amount) || "-"
+    );
+    const escapedWalletAddress = escapeHtml(
+      firstValue(walletAddress, wallet_address) || "-"
+    );
+    const escapedMetadata = escapeHtml(JSON.stringify(metadata, null, 2));
 
     res.send(`
-      <h2>${flowLabel} Status: ${status || "PENDING"}</h2>
-      <p>Order ID: ${firstValue(orderId, order_id) || "-"}</p>
-      <p>Partner Order ID: ${firstValue(partnerOrderId, partner_order_id) || "-"}</p>
-      <p>Crypto Amount: ${firstValue(cryptoAmount, crypto_amount) || "-"}</p>
-      <p>Wallet Address: ${firstValue(walletAddress, wallet_address) || "-"}</p>
+      <h2>${escapedFlowLabel} Status: ${escapedStatus}</h2>
+      <p>Order ID: ${escapedOrderId}</p>
+      <p>Partner Order ID: ${escapedPartnerOrderId}</p>
+      <p>Crypto Amount: ${escapedCryptoAmount}</p>
+      <p>Wallet Address: ${escapedWalletAddress}</p>
       <p>This page is informational only. Final payment state comes from Transak/Tatum webhooks.</p>
-      <pre>${JSON.stringify(metadata, null, 2)}</pre>
+      <pre>${escapedMetadata}</pre>
     `);
   } catch (error) {
     next(error);

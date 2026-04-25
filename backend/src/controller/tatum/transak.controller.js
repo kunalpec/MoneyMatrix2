@@ -1,6 +1,48 @@
 import axios from "axios";
-import crypto from "crypto";
+import jwt from "jsonwebtoken";
 import { ApiError } from "../../util/ApiError.util.js";
+import { verifySha256HmacSignature } from "../../middleware/rawBody.middleware.js";
+
+let cachedTransakAccessToken = String(
+  process.env.TRANSAK_ACCESS_TOKEN || ""
+).trim();
+let cachedTransakAccessTokenExpiresAt = 0;
+let transakAccessTokenRefreshPromise = null;
+
+const normalizeEnvValue = (value) => String(value || "").trim();
+
+const decodeJwtExpiry = (token) => {
+  const decoded = jwt.decode(token);
+  return decoded?.exp ? Number(decoded.exp) * 1000 : 0;
+};
+
+const cacheTransakAccessToken = (token, expiresAt = null) => {
+  const normalizedToken = normalizeEnvValue(token);
+
+  if (!normalizedToken) {
+    throw new ApiError(500, "Transak access token missing");
+  }
+
+  cachedTransakAccessToken = normalizedToken;
+  cachedTransakAccessTokenExpiresAt = expiresAt
+    ? Number(expiresAt) * 1000
+    : decodeJwtExpiry(normalizedToken);
+  process.env.TRANSAK_ACCESS_TOKEN = normalizedToken;
+
+  return normalizedToken;
+};
+
+const getCachedTransakAccessToken = () => {
+  if (!cachedTransakAccessToken && process.env.TRANSAK_ACCESS_TOKEN) {
+    cacheTransakAccessToken(process.env.TRANSAK_ACCESS_TOKEN);
+  }
+
+  return cachedTransakAccessToken;
+};
+
+const isTransakAccessTokenFresh = () =>
+  Boolean(getCachedTransakAccessToken()) &&
+  cachedTransakAccessTokenExpiresAt > Date.now() + 60_000;
 
 // ======== Get Transak Refresh Token URL ========
 const getTransakRefreshTokenUrl = () => {
@@ -11,68 +53,54 @@ const getTransakRefreshTokenUrl = () => {
     : "https://api.transak.com/partners/api/v2/refresh-token";
 };
 
-// ======== Get Webhook Secret ========
-const getTransakWebhookSecret = () => {
-  const secret = process.env.TRANSAK_WEBHOOK_SECRET;
-
-  if (!secret) {
-    throw new ApiError(500, "TRANSAK_WEBHOOK_SECRET missing in .env");
-  }
-
-  return secret;
-};
-
-// ======== Stable JSON stringify (IMPORTANT for consistency) ========
-const stableStringify = (obj) => {
-  if (!obj || typeof obj !== "object") {
-    return JSON.stringify(obj);
-  }
-
-  return JSON.stringify(
-    Object.keys(obj)
-      .sort()
-      .reduce((acc, key) => {
-        acc[key] = obj[key];
-        return acc;
-      }, {})
-  );
-};
-
-// ======== Sign Transak Payload (FIXED) ========
-const signTransakPayload = (payload, secret = getTransakWebhookSecret()) => {
-  // Always ensure string
-  const data =
-    typeof payload === "string" ? payload : JSON.stringify(payload);
-
-  return crypto
-    .createHmac("sha256", secret)
-    .update(data, "utf8") // 🔥 important
-    .digest("hex")
-    .toLowerCase();
-};
-
-// ======== Generate Signature Candidates (FIXED) ========
-const getTransakSignatureCandidates = ({
-  body = {},
-  rawBody,
-  secret = getTransakWebhookSecret(),
-} = {}) => {
-  // RAW payload (exact webhook body)
-  const rawPayload =
-  typeof rawBody === "string" && rawBody.length > 0
-    ? JSON.stringify(JSON.parse(rawBody)) // 🔥 normalize
-    : JSON.stringify(body || {});
-
-  // NORMALIZED payload (sorted keys)
-  const normalizedPayload = stableStringify(body || {});
+const normalizeTransakWebhookPayload = (decodedPayload = {}, rawBody = {}) => {
+  const webhookData = decodedPayload?.webhookData || {};
+  const eventType =
+    decodedPayload?.eventId ||
+    decodedPayload?.eventID ||
+    rawBody?.eventID ||
+    rawBody?.eventId ||
+    webhookData?.status ||
+    rawBody?.status ||
+    null;
 
   return {
-    rawPayload,
-    normalizedPayload,
-
-    // Generate signatures
-    rawHash: signTransakPayload(rawPayload, secret),
-    normalizedHash: signTransakPayload(normalizedPayload, secret),
+    eventType: String(eventType || "").trim().toUpperCase(),
+    data: {
+      ...webhookData,
+      partnerOrderId:
+        webhookData?.partnerOrderId ||
+        webhookData?.partner_order_id ||
+        decodedPayload?.partnerOrderId ||
+        decodedPayload?.partner_order_id ||
+        rawBody?.partnerOrderId ||
+        rawBody?.partner_order_id,
+      orderId:
+        webhookData?.orderId ||
+        webhookData?.orderID ||
+        webhookData?.order_id ||
+        webhookData?.id ||
+        decodedPayload?.orderId ||
+        decodedPayload?.orderID ||
+        decodedPayload?.order_id ||
+        rawBody?.orderId ||
+        rawBody?.orderID ||
+        rawBody?.order_id,
+      providerWebhookId:
+        decodedPayload?.id || rawBody?.id || rawBody?.webhookId || null,
+      eventId:
+        decodedPayload?.eventId ||
+        decodedPayload?.eventID ||
+        rawBody?.eventId ||
+        rawBody?.eventID ||
+        null,
+      eventID:
+        decodedPayload?.eventID ||
+        decodedPayload?.eventId ||
+        rawBody?.eventID ||
+        rawBody?.eventId ||
+        null,
+    },
   };
 };
 
@@ -110,47 +138,145 @@ const generateTransakAccessToken = async () => {
 
     const hint =
       statusCode === 401
-        ? " Verify that TRANSAK_API_KEY and TRANSAK_API_SECRET belong to the same Production environment."
+        ? " Verify that TRANSAK_API_KEY and TRANSAK_API_SECRET belong to the same environment."
         : "";
 
-    throw new ApiError(
-      statusCode,
-      `${transakMessage}${hint}`
-    );
+    throw new ApiError(statusCode, `${transakMessage}${hint}`);
   }
+};
+
+const refreshTransakAccessToken = async () => {
+  if (!transakAccessTokenRefreshPromise) {
+    transakAccessTokenRefreshPromise = (async () => {
+      const data = await generateTransakAccessToken();
+      return {
+        accessToken: cacheTransakAccessToken(data?.accessToken, data?.expiresAt),
+        expiresAt: data?.expiresAt || null,
+      };
+    })().finally(() => {
+      transakAccessTokenRefreshPromise = null;
+    });
+  }
+
+  return transakAccessTokenRefreshPromise;
+};
+
+const getTransakVerificationAccessToken = async () => {
+  if (isTransakAccessTokenFresh()) {
+    return getCachedTransakAccessToken();
+  }
+
+  if (getCachedTransakAccessToken() && cachedTransakAccessTokenExpiresAt === 0) {
+    return getCachedTransakAccessToken();
+  }
+
+  const refreshed = await refreshTransakAccessToken();
+  return refreshed.accessToken;
+};
+
+const verifyTransakWebhookJwt = async (signedJwt, { allowRefresh = true } = {}) => {
+  const verificationToken = await getTransakVerificationAccessToken();
+
+  try {
+    return jwt.verify(signedJwt, verificationToken);
+  } catch (error) {
+    const shouldRetryWithRefresh =
+      allowRefresh &&
+      ["TokenExpiredError", "JsonWebTokenError", "NotBeforeError"].includes(
+        error?.name
+      );
+
+    if (!shouldRetryWithRefresh) {
+      throw new ApiError(401, "Invalid Transak webhook token");
+    }
+
+    const refreshed = await refreshTransakAccessToken();
+
+    try {
+      return jwt.verify(signedJwt, refreshed.accessToken);
+    } catch {
+      throw new ApiError(401, "Invalid Transak webhook token");
+    }
+  }
+};
+
+const verifyTransakWebhookHmac = (req) => {
+  const secret = normalizeEnvValue(process.env.TRANSAK_WEBHOOK_SECRET);
+  const signatureHeader =
+    req.headers["transak-signature"] || req.headers["x-transak-signature"];
+
+  if (!secret || !signatureHeader) {
+    return {
+      checked: false,
+      valid: true,
+    };
+  }
+
+  const payload =
+    typeof req.rawBody === "string" && req.rawBody.length > 0
+      ? req.rawBody
+      : JSON.stringify(req.body || {});
+
+  return {
+    checked: true,
+    valid: verifySha256HmacSignature({
+      payload,
+      providedSignature: Array.isArray(signatureHeader)
+        ? signatureHeader[0]
+        : signatureHeader,
+      secret,
+    }),
+  };
+};
+
+const getVerifiedTransakWebhookPayload = async (req) => {
+  const hmacVerification = verifyTransakWebhookHmac(req);
+
+  if (!hmacVerification.valid) {
+    throw new ApiError(401, "Invalid Transak webhook signature");
+  }
+
+  const signedJwt = normalizeEnvValue(req.body?.data);
+
+  if (!signedJwt) {
+    throw new ApiError(401, "Missing Transak webhook JWT");
+  }
+
+  const decodedPayload = await verifyTransakWebhookJwt(signedJwt);
+
+  return {
+    ...normalizeTransakWebhookPayload(decodedPayload, req.body),
+    decodedPayload,
+    verificationMethod: hmacVerification.checked ? "JWT+HMAC" : "JWT",
+  };
 };
 
 // ======== API: Get Access Token ========
 const getTransakAccessToken = async (req, res) => {
-  const data = await generateTransakAccessToken();
-  return res.json(data);
-};
-
-// ======== API: Generate Webhook Signature (FIXED) ========
-const getTransakWebhookSignature = async (req, res) => {
-  const payload = req.body?.payload ?? req.body ?? {};
-
-  // Use RAW body if available (important)
-  const rawBody =
-    typeof req.body?.rawBody === "string"
-      ? req.body.rawBody
-      : req.rawBody;
-
-  const { rawPayload, normalizedPayload, rawHash, normalizedHash } =
-    getTransakSignatureCandidates({
-      body: payload,
-      rawBody,
-    });
+  const accessToken = await getTransakVerificationAccessToken();
 
   return res.json({
-    signature: rawHash, // 🔥 this is what Transak uses
-    rawSignature: rawHash,
-    normalizedSignature: normalizedHash,
+    accessToken,
+    expiresAt: cachedTransakAccessTokenExpiresAt
+      ? Math.floor(cachedTransakAccessTokenExpiresAt / 1000)
+      : null,
+  });
+};
 
-    debug: {
-      rawPayload,
-      normalizedPayload,
-    },
+// ======== API: Decode Webhook JWT ========
+const getTransakWebhookSignature = async (req, res) => {
+  const signedJwt = normalizeEnvValue(req.body?.data);
+
+  if (!signedJwt) {
+    throw new ApiError(400, "Webhook data JWT is required");
+  }
+
+  const decodedPayload = await verifyTransakWebhookJwt(signedJwt);
+
+  return res.json({
+    verification: "JWT",
+    decodedPayload,
+    normalizedPayload: normalizeTransakWebhookPayload(decodedPayload, req.body),
   });
 };
 
@@ -158,7 +284,5 @@ export {
   generateTransakAccessToken,
   getTransakAccessToken,
   getTransakWebhookSignature,
-  getTransakSignatureCandidates,
-  getTransakWebhookSecret,
-  signTransakPayload,
+  getVerifiedTransakWebhookPayload,
 };

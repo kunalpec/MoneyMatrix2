@@ -2,6 +2,9 @@ import axios from "axios";
 import { ApiError } from "../util/ApiError.util.js";
 import { logger } from "../util/logger.util.js";
 
+const TATUM_TRON_CHAIN = "TRON";
+const TATUM_TRON_NATIVE_SUBSCRIPTION_TYPE = "INCOMING_NATIVE_TX";
+
 const resolvePublicWebhookBaseUrl = () => {
   const configuredBaseUrl =
     process.env.PUBLIC_WEBHOOK_BASE_URL ||
@@ -36,20 +39,115 @@ const getTatumApiKey = () => {
   return apiKey;
 };
 
-export const getTatumDepositWebhookUrl = () =>
+const getTatumWebhookHmacSecret = () => {
+  const hmacSecret = process.env.TATUM_WEBHOOK_HMAC_SECRET;
+
+  if (!hmacSecret) {
+    throw new ApiError(500, "TATUM_WEBHOOK_HMAC_SECRET is required");
+  }
+
+  return hmacSecret;
+};
+
+export const getTatumAddressWebhookUrl = () =>
   `${resolvePublicWebhookBaseUrl()}/api/v1/webhook/tatum/address`;
 
+export const getTatumDepositWebhookUrl = getTatumAddressWebhookUrl;
+
+export const deleteTatumSubscription = async (subscriptionId) => {
+  const normalizedSubscriptionId = String(subscriptionId || "").trim();
+
+  if (!normalizedSubscriptionId) {
+    return false;
+  }
+
+  try {
+    await axios.delete(
+      `https://api.tatum.io/v4/subscription/${normalizedSubscriptionId}`,
+      {
+        headers: {
+          "x-api-key": getTatumApiKey(),
+          "Content-Type": "application/json",
+        },
+        timeout: 15000,
+      }
+    );
+
+    logger.info("tatum.subscription.deleted", {
+      subscriptionId: normalizedSubscriptionId,
+    });
+
+    return true;
+  } catch (error) {
+    const statusCode = error?.response?.status || 500;
+    const message =
+      error?.response?.data?.message ||
+      error?.response?.data?.error?.message ||
+      error?.message ||
+      "Failed to delete Tatum subscription";
+
+    if (statusCode === 404 || /no such subscription/i.test(message)) {
+      logger.info("tatum.subscription.delete_skipped", {
+        subscriptionId: normalizedSubscriptionId,
+        reason: "not_found",
+      });
+      return false;
+    }
+
+    logger.error("tatum.subscription.delete_failed", {
+      subscriptionId: normalizedSubscriptionId,
+      error: message,
+      response: error?.response?.data,
+    });
+
+    throw new ApiError(502, message);
+  }
+};
+
+export const enableTatumWebhookHmac = async () => {
+  try {
+    await axios.put(
+      "https://api.tatum.io/v4/subscription",
+      {
+        hmacSecret: getTatumWebhookHmacSecret(),
+      },
+      {
+        headers: {
+          "x-api-key": getTatumApiKey(),
+          "Content-Type": "application/json",
+        },
+        timeout: 15000,
+      }
+    );
+
+    logger.info("tatum.webhook_hmac.enabled");
+    return true;
+  } catch (error) {
+    const message =
+      error?.response?.data?.message ||
+      error?.response?.data?.error?.message ||
+      error?.message ||
+      "Failed to enable Tatum webhook HMAC";
+
+    logger.error("tatum.webhook_hmac.enable_failed", {
+      error: message,
+      response: error?.response?.data,
+    });
+
+    throw new ApiError(502, message);
+  }
+};
+
 export const createDepositWebhookSubscription = async (address) => {
-  const webhookUrl = getTatumDepositWebhookUrl();
+  const webhookUrl = getTatumAddressWebhookUrl();
 
   try {
     const response = await axios.post(
       "https://api.tatum.io/v4/subscription?type=mainnet",
       {
-        // TRON mainnet address subscriptions are created via ADDRESS_EVENT in Tatum.
-        type: "ADDRESS_EVENT",
+        type: TATUM_TRON_NATIVE_SUBSCRIPTION_TYPE,
         attr: {
-          chain: "TRON",
+          chain: TATUM_TRON_CHAIN,
           address,
           url: webhookUrl,
         },
@@ -65,6 +163,7 @@ export const createDepositWebhookSubscription = async (address) => {
 
     logger.info("tatum.subscription.created", {
       address,
+      webhookUrl,
       response: response?.data,
     });
 
@@ -94,4 +193,15 @@ export const createDepositWebhookSubscription = async (address) => {
 
     throw new ApiError(502, message);
   }
+};
+
+export const replaceDepositWebhookSubscription = async ({
+  address,
+  existingSubscriptionId = null,
+}) => {
+  if (existingSubscriptionId) {
+    await deleteTatumSubscription(existingSubscriptionId);
+  }
+
+  return createDepositWebhookSubscription(address);
 };

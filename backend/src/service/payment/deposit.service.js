@@ -17,6 +17,16 @@ import {
 
 const MAX_WEBHOOK_RETRIES = Number(process.env.WEBHOOK_MAX_RETRIES || 5);
 
+const normalizeDepositCurrency = (currency) => {
+  const normalizedCurrency = String(currency || "TRX").trim().toUpperCase();
+
+  if (normalizedCurrency === "TRON") {
+    return "TRX";
+  }
+
+  return normalizedCurrency || "TRX";
+};
+
 const lockTransaction = async ({ filter, session }) =>
   Transaction.findOneAndUpdate(
     {
@@ -133,6 +143,47 @@ const claimProcessedDeposit = async ({
   }
 };
 
+const resolveDepositWallet = async ({
+  session,
+  address,
+  payload = {},
+}) => {
+  const normalizedAddress = String(address || "").trim();
+  const normalizedSubscriptionId = String(
+    payload?.subscriptionId ||
+      payload?.subscriptionID ||
+      payload?.subscription?.id ||
+      ""
+  ).trim();
+
+  const filters = [];
+
+  if (normalizedAddress) {
+    filters.push({ address: normalizedAddress });
+  }
+
+  if (normalizedSubscriptionId) {
+    filters.push({ depositSubscriptionId: normalizedSubscriptionId });
+  }
+
+  if (filters.length === 0) {
+    return null;
+  }
+
+  const wallet = await Wallet.findOne({ $or: filters }).session(session);
+
+  if (!wallet) {
+    logger.warn("deposit.wallet_not_found", {
+      address: normalizedAddress || null,
+      subscriptionId: normalizedSubscriptionId || null,
+      subscriptionType: payload?.subscriptionType || null,
+      chain: payload?.chain || payload?.network || null,
+    });
+  }
+
+  return wallet;
+};
+
 export const validateTatumDepositPayload = (payload = {}) => {
   const txHash =
     payload.txId ||
@@ -175,6 +226,7 @@ export const processConfirmedDeposit = async ({
 }) => {
   let sweepTxId = null;
   let responseMessage = "Deposit processed";
+  const normalizedCurrency = normalizeDepositCurrency(currency);
 
   const session = await mongoose.startSession();
 
@@ -208,7 +260,11 @@ export const processConfirmedDeposit = async ({
 
       if (!existingTx && !providerExternalId) {
         const wallet = await ensureWalletAccountingFields(
-          await Wallet.findOne({ address }).session(session),
+          await resolveDepositWallet({
+            session,
+            address,
+            payload,
+          }),
           session
         );
 
@@ -219,7 +275,7 @@ export const processConfirmedDeposit = async ({
               type: "DEPOSIT",
               ...buildAmountFieldsFromSun(amountSun),
               provider,
-              currency,
+              currency: normalizedCurrency,
               txId: txHash,
               toAddress: address,
               status: "PROCESSING",
@@ -298,9 +354,11 @@ export const processConfirmedDeposit = async ({
       }
 
       const wallet = await ensureWalletAccountingFields(
-        await Wallet.findOne({ address: lockedTx.toAddress || address }).session(
-          session
-        ),
+        await resolveDepositWallet({
+          session,
+          address: lockedTx.toAddress || address,
+          payload,
+        }),
         session
       );
 
@@ -316,7 +374,7 @@ export const processConfirmedDeposit = async ({
           $set: {
             ...buildAmountFieldsFromSun(amountSun),
             provider,
-            currency,
+            currency: normalizedCurrency,
             txId: txHash,
             ...(providerExternalId ? { externalId: providerExternalId } : {}),
             toAddress: lockedTx.toAddress || address,

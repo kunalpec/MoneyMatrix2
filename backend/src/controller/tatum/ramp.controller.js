@@ -47,7 +47,7 @@ const getTransakEnvironmentConfig = () => {
   const appHostUrl =
     process.env.TRANSAK_HOST_URL ||
     (isDevelopment
-      ? "http://localhost:8000"
+      ? "https://delphia-synostotic-fletcher.ngrok-free.dev"
       : "https://moneymatrixapp.com");
 
   const configuredReferrerDomain = String(
