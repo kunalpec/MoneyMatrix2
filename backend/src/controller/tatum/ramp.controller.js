@@ -7,10 +7,6 @@ import { ApiError } from "../../util/ApiError.util.js";
 import { ApiResponse } from "../../util/ApiResponse.util.js";
 import { tatumClient } from "./client.controller.js";
 import { generateTransakAccessToken } from "./transak.controller.js";
-import {
-  decrypt,
-  derivePrivateKeyFromMnemonic,
-} from "../../util/EncryptDecrypt.util.js";
 import { Transaction } from "../../model/transaction.model.js";
 import {
   buildAmountFieldsFromSun,
@@ -30,6 +26,12 @@ import {
 } from "../../service/payment/withdrawal.service.js";
 import { enqueueWithdrawalJob } from "../../queue/withdrawal.queue.js";
 import { logger } from "../../util/logger.util.js";
+import { resolveTronTransactionSigner } from "../../util/tatumSigner.util.js";
+import {
+  getConfiguredTronTokenAddress,
+  getConfiguredTronTransferCurrency,
+  submitTatumTronTransfer,
+} from "../../util/tronTransfer.util.js";
 
 const TRX_CURRENCY = "TRX";
 
@@ -45,7 +47,7 @@ const getTransakEnvironmentConfig = () => {
   const appHostUrl =
     process.env.TRANSAK_HOST_URL ||
     (isDevelopment
-      ? "https://delphia-synostotic-fletcher.ngrok-free.dev"
+      ? "http://localhost:8000"
       : "https://moneymatrixapp.com");
 
   const configuredReferrerDomain = String(
@@ -132,6 +134,18 @@ const getTransakNetwork = (cryptoCurrencyCode) => {
   return "mainnet";
 };
 
+const normalizeTransakPartnerId = (value, fieldName) => {
+  const normalizedValue = String(value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, "_");
+
+  if (!normalizedValue) {
+    throw new ApiError(400, `${fieldName} is invalid for Transak`);
+  }
+
+  return normalizedValue;
+};
+
 // ======== Get Transaction Amount In SUN (5) ========
 /**
  * Read transaction amount from integer accounting when available.
@@ -177,9 +191,12 @@ const createSweepTransactionDoc = async ({
       toAddress: adminWallet.address,
       externalId: `SWEEP:${sourceTxId}`,
       provider: "TATUM",
-      currency: "TRX",
+      currency: getConfiguredTronTransferCurrency(),
       status: "PENDING",
       processed: false,
+      metadata: {
+        tokenAddress: getConfiguredTronTokenAddress(),
+      },
     },
   ];
 
@@ -245,8 +262,14 @@ export const createOnRampUrl = AsyncHandler(async (req, res) => {
   const widgetParams = {
     apiKey: process.env.TRANSAK_API_KEY,
     productsAvailed: "BUY",
-    partnerCustomerId: user._id.toString(),
-    partnerOrderId: externalId,
+    partnerCustomerId: normalizeTransakPartnerId(
+      user._id,
+      "partnerCustomerId"
+    ),
+    partnerOrderId: normalizeTransakPartnerId(
+      externalId,
+      "partnerOrderId"
+    ),
     cryptoCurrencyCode: TRX_CURRENCY,
     network: getTransakNetwork(TRX_CURRENCY),
     walletAddress: wallet.address,
@@ -399,17 +422,17 @@ export const executePendingSweep = async (sweepTransactionId) => {
   }
 
   // 4. Submit blockchain transfer
-  const mnemonic = decrypt(userWallet.mnemonic);
-  const privateKey = derivePrivateKeyFromMnemonic(
-    mnemonic,
-    userWallet.index || 0
-  );
+  const signer = resolveTronTransactionSigner(userWallet, {
+    walletLabel: "User sweep wallet",
+  });
 
   try {
-    const response = await tatumClient.post("/tron/transaction", {
-      to: adminWallet.address,
+    const response = await submitTatumTronTransfer({
+      toAddress: adminWallet.address,
       amount: sunToTrx(getTransactionAmountSun(lockedSweep)).toString(),
-      fromPrivateKey: privateKey,
+      fromAddress: userWallet.address,
+      tokenAddress: lockedSweep.metadata?.tokenAddress,
+      signer,
     });
 
     // 5. Commit treasury credit and transaction success together
@@ -527,8 +550,14 @@ const buildTransakOffRampWidgetUrl = async ({
     isBuyOrSell: "SELL",
     exchangeScreenTitle: "Sell Crypto",
     hideMenu: true,
-    partnerCustomerId: user._id.toString(),
-    partnerOrderId: externalId,
+    partnerCustomerId: normalizeTransakPartnerId(
+      user._id,
+      "partnerCustomerId"
+    ),
+    partnerOrderId: normalizeTransakPartnerId(
+      externalId,
+      "partnerOrderId"
+    ),
     cryptoCurrencyCode: TRX_CURRENCY,
     network: getTransakNetwork(TRX_CURRENCY),
     ...(user?.email
@@ -576,7 +605,7 @@ const resolveUserTronDestinationAddress = async ({
  * on-chain confirmation can be finalized later by the webhook handler.
  */
 export const withdrawTrx = AsyncHandler(async (req, res) => {
-  const { amount, toAddress } = req.body;
+  const { amount, toAddress, tokenAddress } = req.body;
   const user = req.user;
   const amountSun = trxToSun(amount, "Withdraw amount");
 
@@ -606,21 +635,18 @@ export const withdrawTrx = AsyncHandler(async (req, res) => {
     throw new ApiError(400, "Self-transfer to admin wallet is not allowed");
   }
 
-  if (getWalletBalanceSun(adminWallet) < amountSun) {
-    throw new ApiError(400, "Admin insufficient balance");
-  }
-
   const withdrawalTransaction = await reserveWithdrawalTransaction({
     user,
     amountSun,
     destinationAddress,
     provider: "TATUM",
-    currency: TRX_CURRENCY,
+    currency: getConfiguredTronTransferCurrency({ tokenAddress }),
     status: "PENDING",
     deductUserBalance: user.role !== "admin",
     metadata: {
       queue: "withdrawal",
       requestedAt: new Date(),
+      tokenAddress: getConfiguredTronTokenAddress({ tokenAddress }),
     },
   });
 

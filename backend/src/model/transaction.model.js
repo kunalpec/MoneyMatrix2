@@ -46,7 +46,7 @@ const transactionSchema = new mongoose.Schema(
 
     currency: {
       type: String,
-      enum: ["TRX", null],
+      enum: ["TRX", "TRC20", null],
       default: "TRX",
     },
 

@@ -1,14 +1,16 @@
 {
   "name": "backend",
   "version": "1.0.0",
-  "description": "",
   "main": "index.js",
   "type": "module",
   "scripts": {
     "dev": "nodemon src/index.js",
     "build": "echo 'No build step required for plain JS backend'",
     "migrate:wallet-accounting": "node src/scripts/migrateWalletAccounting.js",
-    "migrate:wallet-subscriptions": "node src/scripts/backfillWalletSubscriptions.js"
+    "migrate:wallet-subscriptions": "node src/scripts/backfillWalletSubscriptions.js",
+    "kms:admin": "node src/scripts/configureAdminKms.js",
+    "admin:wallet": "node src/scripts/ensureAdminWallet.js",
+    "payments:check": "node src/scripts/checkPaymentReadiness.js"
   },
   "keywords": [],
   "author": "",
@@ -36,5 +38,6 @@
   },
   "devDependencies": {
     "nodemon": "^3.1.14"
-  }
+  },
+  "description": ""
 }

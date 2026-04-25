@@ -10,6 +10,10 @@ import {
 import { ApiError } from "../../util/ApiError.util.js";
 import { logger } from "../../util/logger.util.js";
 import { ensureWalletAccountingFields } from "./walletAccounting.service.js";
+import {
+  getConfiguredTronTokenAddress,
+  getConfiguredTronTransferCurrency,
+} from "../../util/tronTransfer.util.js";
 
 const MAX_WEBHOOK_RETRIES = Number(process.env.WEBHOOK_MAX_RETRIES || 5);
 
@@ -77,12 +81,15 @@ const createSweepPlaceholder = async ({
         type: "SWEEP",
         ...buildAmountFieldsFromSun(sweepAmountSun),
         provider: "TATUM",
-        currency: "TRX",
+        currency: getConfiguredTronTransferCurrency(),
         fromAddress: wallet.address,
         toAddress: adminWallet.address,
         externalId: `SWEEP:${sourceTxId}`,
         status: "PENDING",
         processed: false,
+        metadata: {
+          tokenAddress: getConfiguredTronTokenAddress(),
+        },
       },
     ],
     { session }

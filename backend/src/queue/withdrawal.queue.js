@@ -34,7 +34,7 @@ export const enqueueWithdrawalJob = async (transactionId) => {
     "process-withdrawal",
     { transactionId },
     {
-      jobId: `withdrawal:${transactionId}`,
+      jobId: `withdrawal_${transactionId}`,
     }
   );
 

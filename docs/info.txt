@@ -1,0 +1,4 @@
+{
+  "signatureId": "aa43fa62-3873-429b-84c5-c271538a00c0",
+  "xpub": "xpub6DycnprcwHt2dhrnk6VFMQWSDgvKerE7E5ccnU2iR3utJfpDAXNeotiCzx4g2KV4qercGycJRijXXAybmAhT1Gmd4R2d1pwnm7DWwMcrMGo" 
+}

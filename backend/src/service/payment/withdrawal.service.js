@@ -7,16 +7,15 @@ import {
   sunToTrx,
 } from "../../util/trxAmount.util.js";
 import { ApiError } from "../../util/ApiError.util.js";
-import {
-  decrypt,
-  derivePrivateKeyFromMnemonic,
-} from "../../util/EncryptDecrypt.util.js";
-import { tatumClient } from "../../controller/tatum/client.controller.js";
 import { logger } from "../../util/logger.util.js";
 import {
   ensureWalletAccountingFields,
-  getWalletBalanceSun,
 } from "./walletAccounting.service.js";
+import { resolveTronTransactionSigner } from "../../util/tatumSigner.util.js";
+import {
+  getConfiguredTronTransferCurrency,
+  submitTatumTronTransfer,
+} from "../../util/tronTransfer.util.js";
 
 export const reserveWithdrawalTransaction = async ({
   user,
@@ -66,7 +65,10 @@ export const reserveWithdrawalTransaction = async ({
             toAddress: destinationAddress,
             provider,
             currency,
-            metadata,
+            metadata: {
+              ...metadata,
+              reservedFromUserBalance: deductUserBalance,
+            },
           },
         ],
         { session }
@@ -149,18 +151,53 @@ const lockQueuedWithdrawal = async (transactionId) =>
     { returnDocument: "after" }
   );
 
-const markWithdrawalFailure = async ({ transactionId, message }) => {
-  await Transaction.updateOne(
-    { _id: transactionId, processed: false },
-    {
-      $set: {
-        status: "FAILED",
-        lockedAt: null,
-        lastError: message,
-      },
-      $inc: { retryCount: 1 },
-    }
+const refundReservedUserBalance = async ({ transaction, session }) => {
+  if (!transaction?.metadata?.reservedFromUserBalance || !transaction?.userId) {
+    return;
+  }
+
+  const wallet = await ensureWalletAccountingFields(
+    await Wallet.findOne({ user: transaction.userId }).session(session),
+    session
   );
+
+  if (!wallet) {
+    throw new ApiError(500, "User wallet missing for failed withdrawal refund");
+  }
+
+  await Wallet.updateOne(
+    { _id: wallet._id },
+    { $inc: buildBalanceIncrementFromSun(transaction.amountSun) },
+    { session }
+  );
+};
+
+const failQueuedWithdrawalWithRefund = async ({ transaction, message }) => {
+  const session = await mongoose.startSession();
+
+  try {
+    await session.withTransaction(async () => {
+      await Transaction.updateOne(
+        { _id: transaction._id, processed: false },
+        {
+          $set: {
+            status: "FAILED",
+            lockedAt: null,
+            lastError: message,
+          },
+          $inc: { retryCount: 1 },
+        },
+        { session }
+      );
+
+      await refundReservedUserBalance({
+        transaction,
+        session,
+      });
+    });
+  } finally {
+    await session.endSession();
+  }
 };
 
 export const processQueuedWithdrawal = async ({ transactionId }) => {
@@ -175,19 +212,11 @@ export const processQueuedWithdrawal = async ({ transactionId }) => {
   );
 
   if (!adminWallet) {
-    await markWithdrawalFailure({
-      transactionId,
+    await failQueuedWithdrawalWithRefund({
+      transaction: lockedTransaction,
       message: "Admin wallet missing",
     });
     throw new ApiError(500, "Admin wallet missing");
-  }
-
-  if (getWalletBalanceSun(adminWallet) < lockedTransaction.amountSun) {
-    await markWithdrawalFailure({
-      transactionId,
-      message: "Admin insufficient balance",
-    });
-    throw new ApiError(400, "Admin insufficient balance");
   }
 
   const debitSession = await mongoose.startSession();
@@ -210,7 +239,7 @@ export const processQueuedWithdrawal = async ({ transactionId }) => {
       );
 
       if (!updatedAdminWallet) {
-        throw new ApiError(409, "Admin balance changed before withdrawal send");
+        throw new ApiError(400, "Admin insufficient balance");
       }
 
       await Transaction.updateOne(
@@ -228,16 +257,17 @@ export const processQueuedWithdrawal = async ({ transactionId }) => {
 
     adminDebited = true;
 
-    const mnemonic = decrypt(adminWallet.mnemonic);
-    const privateKey = derivePrivateKeyFromMnemonic(
-      mnemonic,
-      adminWallet.index || 0
-    );
+    const signer = resolveTronTransactionSigner(adminWallet, {
+      walletLabel: "Admin withdrawal wallet",
+      envSignatureId: process.env.TATUM_TRON_ADMIN_SIGNATURE_ID,
+    });
 
-    const response = await tatumClient.post("/tron/transaction", {
-      to: lockedTransaction.toAddress,
+    const response = await submitTatumTronTransfer({
+      toAddress: lockedTransaction.toAddress,
       amount: sunToTrx(lockedTransaction.amountSun).toString(),
-      fromPrivateKey: privateKey,
+      fromAddress: adminWallet.address,
+      tokenAddress: lockedTransaction.metadata?.tokenAddress,
+      signer,
     });
 
     await Transaction.updateOne(
@@ -245,6 +275,9 @@ export const processQueuedWithdrawal = async ({ transactionId }) => {
       {
         $set: {
           txId: response.data.txId,
+          currency: getConfiguredTronTransferCurrency({
+            tokenAddress: lockedTransaction.metadata?.tokenAddress,
+          }),
           lastError: null,
         },
       }
@@ -282,13 +315,18 @@ export const processQueuedWithdrawal = async ({ transactionId }) => {
             },
             { session: refundSession }
           );
+
+          await refundReservedUserBalance({
+            transaction: lockedTransaction,
+            session: refundSession,
+          });
         });
       } finally {
         await refundSession.endSession();
       }
     } else {
-      await markWithdrawalFailure({
-        transactionId: lockedTransaction._id,
+      await failQueuedWithdrawalWithRefund({
+        transaction: lockedTransaction,
         message: error?.response?.data?.message || error.message,
       });
     }

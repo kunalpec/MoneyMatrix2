@@ -27,7 +27,7 @@ const resolvePublicWebhookBaseUrl = () => {
 };
 
 const getTatumApiKey = () => {
-  const apiKey = process.env.TATUM_API_KEY || process.env.TATUM_API_KEY_KUNAL;
+  const apiKey = process.env.TATUM_API_KEY;
 
   if (!apiKey) {
     throw new ApiError(500, "TATUM_API_KEY is missing");

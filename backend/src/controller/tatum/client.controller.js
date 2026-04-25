@@ -4,7 +4,7 @@ import axios from "axios";
 export const tatumClient = axios.create({
   baseURL: "https://api.tatum.io/v3",
   headers: {
-    "x-api-key": process.env.TATUM_API_KEY || process.env.TATUM_API_KEY_KUNAL,
+    "x-api-key": process.env.TATUM_API_KEY,
   },
   timeout: 15000,
 });

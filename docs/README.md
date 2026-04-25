@@ -94,12 +94,15 @@ CORS_ORIGINS=http://localhost:5173,http://localhost:3000
 
 MENEMONIC_ENCRYPTION_KEY=your_strong_encryption_key
 
-TATUM_API_KEY_KUNAL=your_tatum_api_key
+TATUM_API_KEY=your_tatum_api_key
 TATUM_WEBHOOK_SECRET=your_tatum_webhook_secret
+TATUM_WEBHOOK_HMAC_SECRET=your_tatum_hmac_secret
+TATUM_TRON_ADMIN_ADDRESS=your_admin_tron_address
+TATUM_TRON_ADMIN_SIGNATURE_ID=your_tatum_signature_id
+TATUM_TRON_TRANSFER_MODE=TRX
 
 TRANSAK_API_KEY=your_transak_api_key
 TRANSAK_API_SECRET=your_transak_api_secret
-TRANSAK_ACCESS_TOKEN=
 TRANSAK_WEBHOOK_SECRET=your_transak_webhook_secret
 TRANSAK_HOST_URL=https://your-public-app-domain.com
 TRANSAK_REFERRER_DOMAIN=your-public-app-domain.com

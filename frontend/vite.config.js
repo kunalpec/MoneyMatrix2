@@ -1,14 +1,17 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+const allowedHosts = (process.env.VITE_ALLOWED_HOSTS || '')
+  .split(',')
+  .map((host) => host.trim())
+  .filter(Boolean)
+
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: true, // allow external access
-    port: 5173, // optional (your dev port)
+    host: true,
+    port: 5173,
     strictPort: true,
-    allowedHosts: [
-      'delphia-synostotic-fletcher.ngrok-free.dev'
-    ]
+    allowedHosts
   }
 })
