@@ -564,19 +564,39 @@ Example response:
 }
 ```
 
-### `POST /api/v1/transak/signature`
+### `POST /api/v1/transak/jwt-token`
 
-Returns HMAC signature data for debugging Transak webhook signature issues.
+Generates a Transak-style webhook JWT for testing and returns a ready-to-send webhook body.
 
 Request body:
 
 ```json
 {
-  "payload": {
-    "example": true
-  }
+  "eventId": "ORDER_COMPLETED",
+  "orderId": "322dc79c-fad2-4df1-bf50-b292191fc953",
+  "status": "COMPLETED",
+  "cryptoAmount": "955.93",
+  "cryptoCurrency": "TRX",
+  "walletAddress": "TWhzMExtXfcXJpbTRMvXxJqnUrRdV4hf8p",
+  "fiatAmount": 4500,
+  "fiatCurrency": "INR",
+  "countryCode": "IN"
 }
 ```
+
+### `POST /api/v1/webhook/tatum/hmac`
+
+Generates a Tatum `x-payload-hash` for the exact payload string you want to send.
+
+Request body when you want to preserve spaces and line breaks exactly:
+
+```json
+{
+  "rawPayload": "{\n  \"subscriptionType\": \"INCOMING_NATIVE_TX\",\n  \"chain\": \"TRON\",\n  \"address\": \"TJv25FCA2bwLeJHs8op1duVkWkucGyswPF\",\n  \"counterAddress\": \"TSENDER_WALLET_ADDRESS\",\n  \"amount\": \"0.000241500000147\",\n  \"txId\": \"27c8f9a1b2c3d4e5f6789012345678901234567890abcdef\",\n  \"blockNumber\": 651631,\n  \"timestamp\": \"2026-04-27T08:00:00.000Z\",\n  \"fee\": \"0.000001\",\n  \"confirmations\": 1\n}"
+}
+```
+
+If you send `payload` instead of `rawPayload`, the backend hashes `JSON.stringify(payload)` as a minified JSON string.
 
 ### `GET /api/v1/transak/success`
 

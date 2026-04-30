@@ -17,6 +17,51 @@ import {
   submitTatumTronTransfer,
 } from "../../util/tronTransfer.util.js";
 
+const getReservedWithdrawalAmountSun = (transaction) => {
+  const requestedAmountSun = transaction?.metadata?.requestedAmountSun;
+
+  if (Number.isSafeInteger(requestedAmountSun) && requestedAmountSun > 0) {
+    return requestedAmountSun;
+  }
+
+  return transaction?.amountSun || 0;
+};
+
+const buildWithdrawalTatumMetadata = ({
+  existingMetadata = {},
+  txId = null,
+  fromAddress = null,
+  toAddress = null,
+  amount = null,
+  fee = null,
+  blockNumber = null,
+  timestamp = null,
+  subscriptionType = "OUTGOING_NATIVE_TX",
+  chain = "tron-mainnet",
+}) => ({
+  ...(existingMetadata && typeof existingMetadata === "object"
+    ? existingMetadata
+    : {}),
+  tatum: {
+    ...((existingMetadata &&
+      typeof existingMetadata === "object" &&
+      existingMetadata.tatum &&
+      typeof existingMetadata.tatum === "object")
+      ? existingMetadata.tatum
+      : {}),
+    provider: "TATUM",
+    subscriptionType,
+    chain,
+    ...(txId ? { txId } : {}),
+    ...(fromAddress ? { fromAddress } : {}),
+    ...(toAddress ? { toAddress } : {}),
+    ...(amount !== null && amount !== undefined ? { amount } : {}),
+    ...(fee !== null && fee !== undefined ? { fee } : {}),
+    ...(blockNumber !== null && blockNumber !== undefined ? { blockNumber } : {}),
+    ...(timestamp ? { timestamp } : {}),
+  },
+});
+
 export const reserveWithdrawalTransaction = async ({
   user,
   amountSun,
@@ -58,7 +103,8 @@ export const reserveWithdrawalTransaction = async ({
           {
             userId: user._id,
             type: "WITHDRAW",
-            ...buildAmountFieldsFromSun(amountSun),
+            ...buildAmountFieldsFromSun(0),
+            fee: null,
             externalId,
             status,
             processed: false,
@@ -67,6 +113,8 @@ export const reserveWithdrawalTransaction = async ({
             currency,
             metadata: {
               ...metadata,
+              requestedAmountSun: amountSun,
+              requestedAmount: Number(sunToTrx(amountSun)),
               reservedFromUserBalance: deductUserBalance,
             },
           },
@@ -232,9 +280,13 @@ export const processQueuedWithdrawal = async ({ transactionId }) => {
       const updatedAdminWallet = await Wallet.findOneAndUpdate(
         {
           _id: adminWalletInSession._id,
-          trxBalanceSun: { $gte: lockedTransaction.amountSun },
+          trxBalanceSun: { $gte: getReservedWithdrawalAmountSun(lockedTransaction) },
         },
-        { $inc: buildBalanceIncrementFromSun(-lockedTransaction.amountSun) },
+        {
+          $inc: buildBalanceIncrementFromSun(
+            -getReservedWithdrawalAmountSun(lockedTransaction)
+          ),
+        },
         { returnDocument: "after", session: debitSession }
       );
 
@@ -264,7 +316,7 @@ export const processQueuedWithdrawal = async ({ transactionId }) => {
 
     const response = await submitTatumTronTransfer({
       toAddress: lockedTransaction.toAddress,
-      amount: sunToTrx(lockedTransaction.amountSun).toString(),
+      amount: sunToTrx(getReservedWithdrawalAmountSun(lockedTransaction)).toString(),
       fromAddress: adminWallet.address,
       tokenAddress: lockedTransaction.metadata?.tokenAddress,
       signer,
@@ -275,8 +327,25 @@ export const processQueuedWithdrawal = async ({ transactionId }) => {
       {
         $set: {
           txId: response.data.txId,
+          fromAddress: adminWallet.address,
+          ...buildAmountFieldsFromSun(getReservedWithdrawalAmountSun(lockedTransaction)),
+          fee:
+            response?.data?.fee !== undefined && response?.data?.fee !== null
+              ? Number(response.data.fee)
+              : null,
           currency: getConfiguredTronTransferCurrency({
             tokenAddress: lockedTransaction.metadata?.tokenAddress,
+          }),
+          metadata: buildWithdrawalTatumMetadata({
+            existingMetadata: lockedTransaction.metadata,
+            txId: response.data.txId,
+            fromAddress: adminWallet.address,
+            toAddress: lockedTransaction.toAddress,
+            amount: sunToTrx(getReservedWithdrawalAmountSun(lockedTransaction)).toString(),
+            fee:
+              response?.data?.fee !== undefined && response?.data?.fee !== null
+                ? String(response.data.fee)
+                : null,
           }),
           lastError: null,
         },
@@ -286,7 +355,7 @@ export const processQueuedWithdrawal = async ({ transactionId }) => {
     logger.info("withdrawal.submitted", {
       transactionId: lockedTransaction._id.toString(),
       txId: response?.data?.txId,
-      amountSun: lockedTransaction.amountSun,
+      amountSun: getReservedWithdrawalAmountSun(lockedTransaction),
       toAddress: lockedTransaction.toAddress,
     });
 
@@ -299,7 +368,11 @@ export const processQueuedWithdrawal = async ({ transactionId }) => {
         await refundSession.withTransaction(async () => {
           await Wallet.updateOne(
             { _id: adminWallet._id },
-            { $inc: buildBalanceIncrementFromSun(lockedTransaction.amountSun) },
+            {
+              $inc: buildBalanceIncrementFromSun(
+                getReservedWithdrawalAmountSun(lockedTransaction)
+              ),
+            },
             { session: refundSession }
           );
 

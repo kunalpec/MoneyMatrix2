@@ -263,26 +263,76 @@ const getTransakAccessToken = async (req, res) => {
   });
 };
 
-// ======== API: Decode Webhook JWT ========
-const getTransakWebhookSignature = async (req, res) => {
-  const signedJwt = normalizeEnvValue(req.body?.data);
+// ======== API: Generate Webhook JWT ========
+const createTransakWebhookJwt = async (req, res) => {
+  const inputPayload =
+    req.body?.payload && typeof req.body.payload === "object"
+      ? req.body.payload
+      : req.body || {};
+  const webhookData =
+    inputPayload?.webhookData && typeof inputPayload.webhookData === "object"
+      ? inputPayload.webhookData
+      : {};
+  const eventId = normalizeEnvValue(
+    inputPayload?.eventId ||
+      inputPayload?.eventID ||
+      webhookData?.eventId ||
+      webhookData?.eventID ||
+      webhookData?.status
+  ).toUpperCase();
+  const orderId = normalizeEnvValue(
+    inputPayload?.orderId ||
+      inputPayload?.orderID ||
+      inputPayload?.order_id ||
+      webhookData?.orderId ||
+      webhookData?.orderID ||
+      webhookData?.order_id ||
+      webhookData?.id
+  );
 
-  if (!signedJwt) {
-    throw new ApiError(400, "Webhook data JWT is required");
+  if (!eventId) {
+    throw new ApiError(400, "eventId is required");
   }
 
-  const decodedPayload = await verifyTransakWebhookJwt(signedJwt);
+  if (!orderId) {
+    throw new ApiError(400, "orderId is required");
+  }
+
+  const signedPayload = {
+    ...inputPayload,
+    eventId,
+    eventID: eventId,
+    orderId,
+    status: inputPayload?.status || webhookData?.status || null,
+    webhookData: {
+      ...inputPayload,
+      ...webhookData,
+      id: orderId,
+      orderId,
+      status:
+        webhookData?.status || inputPayload?.status || webhookData?.eventId || null,
+    },
+  };
+
+  const signingToken = await getTransakVerificationAccessToken();
+  const expiresIn = normalizeEnvValue(req.body?.expiresIn || "1h");
+  const signedJwt = jwt.sign(signedPayload, signingToken, { expiresIn });
 
   return res.json({
     verification: "JWT",
-    decodedPayload,
-    normalizedPayload: normalizeTransakWebhookPayload(decodedPayload, req.body),
+    jwtToken: signedJwt,
+    webhookPayload: {
+      data: signedJwt,
+      eventID: eventId,
+      webhookData: signedPayload.webhookData,
+    },
+    normalizedPayload: normalizeTransakWebhookPayload(signedPayload, req.body),
   });
 };
 
 export {
   generateTransakAccessToken,
   getTransakAccessToken,
-  getTransakWebhookSignature,
+  createTransakWebhookJwt,
   getVerifiedTransakWebhookPayload,
 };

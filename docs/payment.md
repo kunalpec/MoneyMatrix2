@@ -94,8 +94,13 @@ POST BASE_URL/api/v1/webhook/transak/withdraw
 Required header:
 
 ```txt
-x-transak-signature: <valid_hmac_signature>
 Content-Type: application/json
+```
+
+Optional header:
+
+```txt
+x-transak-signature: <valid_hmac_signature>
 ```
 
 The backend accepts the real Transak format:
@@ -161,23 +166,22 @@ CANCELLED
 CANCELED
 ```
 
-### Generate Transak Test Signature
+### Generate Transak Test JWT
 
-To test manually, first generate a signature from your backend:
+To test manually, first generate a JWT from your backend:
 
 ```bash
-curl -X POST BASE_URL/api/v1/transak/signature \
+curl -X POST BASE_URL/api/v1/transak/jwt-token \
   -H "Content-Type: application/json" \
-  -d '{"payload":{"meta":{"orderID":"322dc79c-fad2-4df1-bf50-b292191fc953","eventID":"ORDER_COMPLETED"},"data":[{"id":"670e7c469f2a5dd93fbe4406","eventID":"ORDER_COMPLETED","webhookData":{"id":"322dc79c-fad2-4df1-bf50-b292191fc953","status":"COMPLETED","walletAddress":"TWhzMExtXfcXJpbTRMvXxJqnUrRdV4hf8p","cryptoCurrency":"TRX","cryptoAmount":955.93,"isBuyOrSell":"BUY","network":"tron","transactionHash":"DUMMY_OR_REAL_CHAIN_TX_ID"}}]}}'
+  -d '{"eventId":"ORDER_COMPLETED","orderId":"322dc79c-fad2-4df1-bf50-b292191fc953","status":"COMPLETED","cryptoAmount":"955.93","cryptoCurrency":"TRX","walletAddress":"TWhzMExtXfcXJpbTRMvXxJqnUrRdV4hf8p","fiatAmount":4500,"fiatCurrency":"INR","countryCode":"IN"}'
 ```
 
-Then send the same payload to the webhook:
+Then send the returned `webhookPayload` to the webhook:
 
 ```bash
 curl -X POST BASE_URL/api/v1/webhook/transak \
   -H "Content-Type: application/json" \
-  -H "x-transak-signature: <signature_from_previous_response>" \
-  -d '{"meta":{"orderID":"322dc79c-fad2-4df1-bf50-b292191fc953","eventID":"ORDER_COMPLETED"},"data":[{"id":"670e7c469f2a5dd93fbe4406","eventID":"ORDER_COMPLETED","webhookData":{"id":"322dc79c-fad2-4df1-bf50-b292191fc953","status":"COMPLETED","walletAddress":"TWhzMExtXfcXJpbTRMvXxJqnUrRdV4hf8p","cryptoCurrency":"TRX","cryptoAmount":955.93,"isBuyOrSell":"BUY","network":"tron","transactionHash":"DUMMY_OR_REAL_CHAIN_TX_ID"}}]}'
+  -d '{"data":"<jwt_from_previous_response>","eventID":"ORDER_COMPLETED","webhookData":{"id":"322dc79c-fad2-4df1-bf50-b292191fc953","orderId":"322dc79c-fad2-4df1-bf50-b292191fc953","status":"COMPLETED","walletAddress":"TWhzMExtXfcXJpbTRMvXxJqnUrRdV4hf8p","cryptoCurrency":"TRX","cryptoAmount":"955.93","fiatAmount":4500,"fiatCurrency":"INR","countryCode":"IN"}}'
 ```
 
 ## Tatum Deposit Webhook

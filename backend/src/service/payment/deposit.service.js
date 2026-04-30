@@ -1,7 +1,6 @@
 import mongoose from "mongoose";
 import { Wallet } from "../../model/wallet.model.js";
 import { Transaction } from "../../model/transaction.model.js";
-import { ProcessedTx } from "../../model/processedTx.model.js";
 import {
   buildAmountFieldsFromSun,
   buildBalanceIncrementFromSun,
@@ -16,6 +15,25 @@ import {
 } from "../../util/tronTransfer.util.js";
 
 const MAX_WEBHOOK_RETRIES = Number(process.env.WEBHOOK_MAX_RETRIES || 5);
+
+const buildTransactionMetadata = ({
+  existingMetadata = {},
+  provider,
+  payload = {},
+}) => {
+  const providerKey = String(provider || "").trim().toLowerCase();
+
+  if (!providerKey) {
+    return existingMetadata;
+  }
+
+  return {
+    ...(existingMetadata && typeof existingMetadata === "object"
+      ? existingMetadata
+      : {}),
+    [providerKey]: payload,
+  };
+};
 
 const normalizeDepositCurrency = (currency) => {
   const normalizedCurrency = String(currency || "TRX").trim().toUpperCase();
@@ -108,41 +126,6 @@ const createSweepPlaceholder = async ({
   return sweepTx._id;
 };
 
-const claimProcessedDeposit = async ({
-  session,
-  provider,
-  txHash,
-  address,
-  amountSun,
-  source,
-  metadata,
-}) => {
-  try {
-    await ProcessedTx.create(
-      [
-        {
-          provider,
-          direction: "DEPOSIT",
-          txHash,
-          address,
-          amountSun,
-          source,
-          metadata,
-        },
-      ],
-      { session }
-    );
-
-    return true;
-  } catch (error) {
-    if (error?.code === 11000) {
-      return false;
-    }
-
-    throw error;
-  }
-};
-
 const resolveDepositWallet = async ({
   session,
   address,
@@ -228,6 +211,13 @@ export const processConfirmedDeposit = async ({
   let responseMessage = "Deposit processed";
   const normalizedCurrency = normalizeDepositCurrency(currency);
 
+  if (provider !== "TATUM" || source !== "WEBHOOK") {
+    throw new ApiError(
+      403,
+      "Deposit settlement is allowed only from the Tatum webhook"
+    );
+  }
+
   const session = await mongoose.startSession();
 
   try {
@@ -280,7 +270,10 @@ export const processConfirmedDeposit = async ({
               toAddress: address,
               status: "PROCESSING",
               processed: false,
-              metadata: payload,
+              metadata: buildTransactionMetadata({
+                provider,
+                payload,
+              }),
             },
           ],
           { session }
@@ -338,21 +331,6 @@ export const processConfirmedDeposit = async ({
         throw new ApiError(409, "Deposit address mismatch for externalId");
       }
 
-      const claimed = await claimProcessedDeposit({
-        session,
-        provider,
-        txHash,
-        address,
-        amountSun,
-        source,
-        metadata: payload,
-      });
-
-      if (!claimed) {
-        responseMessage = "Already processed";
-        return;
-      }
-
       const wallet = await ensureWalletAccountingFields(
         await resolveDepositWallet({
           session,
@@ -373,8 +351,8 @@ export const processConfirmedDeposit = async ({
         {
           $set: {
             ...buildAmountFieldsFromSun(amountSun),
-            provider,
-            currency: normalizedCurrency,
+            provider: lockedTx.provider || provider,
+            currency: lockedTx.currency || normalizedCurrency,
             txId: txHash,
             ...(providerExternalId ? { externalId: providerExternalId } : {}),
             toAddress: lockedTx.toAddress || address,
@@ -385,7 +363,11 @@ export const processConfirmedDeposit = async ({
             completedAt: new Date(),
             lockedAt: null,
             lastError: null,
-            metadata: payload,
+            metadata: buildTransactionMetadata({
+              existingMetadata: lockedTx.metadata,
+              provider,
+              payload,
+            }),
           },
         },
         { session }

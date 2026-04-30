@@ -8,7 +8,7 @@ It currently uses:
 
 - `Tatum` for Tron wallet generation and blockchain transaction submission
 - `Transak` for fiat-to-crypto on-ramp and crypto-to-fiat off-ramp flows
-- `MongoDB + Mongoose` for wallet, transaction, and webhook-event storage
+- `MongoDB + Mongoose` for wallet and transaction storage
 - `JWT authentication` to protect user payment endpoints
 
 The system already supports:
@@ -33,7 +33,6 @@ This is a solid development-stage payment foundation, but it should not yet be d
 - `backend/src/controller/tatum/client.controller.js`
 - `backend/src/model/wallet.model.js`
 - `backend/src/model/transaction.model.js`
-- `backend/src/model/webhookEvent.model.js`
 - `backend/src/routes/ramp.route.js`
 - `backend/src/routes/webhook.route.js`
 - `backend/src/util/EncryptDecrypt.util.js`
@@ -115,7 +114,7 @@ How it works:
 
 1. The backend verifies the `x-transak-signature` HMAC.
 2. It normalizes the incoming payload using `getPayload`.
-3. It stores the raw delivery in `WebhookEvent`.
+3. It stores the normalized provider payload in the matching `Transaction` metadata.
 4. It finds the related transaction by `externalId`.
 5. If the event is a successful deposit event, it moves the transaction to `PROCESSING`.
 6. If the event is a successful withdrawal event, it marks the transaction `SUCCESS`.
@@ -125,7 +124,7 @@ Why it exists:
 
 - to capture provider-level order status changes
 - to distinguish provider completion from actual blockchain confirmation
-- to preserve an auditable webhook history
+- to preserve provider and blockchain state on the matching transaction record
 
 Main function:
 
@@ -139,7 +138,7 @@ How it works:
 
 1. The backend verifies `x-tatum-webhook-secret`.
 2. It extracts `txId`, destination address, amount, and confirmations.
-3. It logs the webhook delivery in `WebhookEvent`.
+3. It reads and reconciles the webhook payload against the matching `Transaction`.
 4. It waits until the configured minimum confirmation count is reached.
 5. It checks whether the blockchain transaction was already processed.
 6. It finds or creates the matching `DEPOSIT` transaction.
@@ -242,7 +241,7 @@ The withdrawal confirmation webhook is handled by `tronWithdrawWebhook`.
 How it works:
 
 1. The backend verifies the Tatum webhook secret.
-2. It logs the webhook delivery in `WebhookEvent`.
+2. It reconciles the webhook payload against the matching `Transaction`.
 3. It finds the related `WITHDRAW` transaction by `txId`.
 4. It safely locks the transaction for processing.
 5. It marks the withdrawal as `SUCCESS` and stores processing timestamps.
@@ -349,22 +348,6 @@ Extracts the currency or token code from different provider field names.
 
 Extracts the blockchain transaction hash from Transak payload variants.
 
-#### `createWebhookEvent`
-
-Stores every incoming webhook delivery in the `WebhookEvent` collection for audit and retry visibility.
-
-#### `finalizeWebhookEvent`
-
-Updates a stored webhook event with processing details.
-
-#### `markWebhookSuccess`
-
-Marks a webhook event as successfully processed.
-
-#### `markWebhookFailure`
-
-Records a webhook failure message and increments webhook retry counters.
-
 #### `incrementTransactionRetry`
 
 Increments transaction retry metadata when webhook processing fails and can eventually mark the transaction as failed.
@@ -468,27 +451,6 @@ Important indexes:
 - unique partial index on `externalId`
 - unique partial index on `txId`
 
-### WebhookEvent model
-
-The `WebhookEvent` model stores:
-
-- `provider`
-- `eventType`
-- `txId`
-- `externalId`
-- `payload`
-- `receivedAt`
-- `processed`
-- `processedAt`
-- `retryCount`
-- `error`
-
-Why this model matters:
-
-- it preserves the raw webhook delivery trail
-- it helps support debugging and retries
-- it improves auditability of provider callbacks
-
 ## Security and reliability features already present
 
 The current implementation already includes some useful safeguards:
@@ -498,7 +460,7 @@ The current implementation already includes some useful safeguards:
 - Transak HMAC signature verification
 - encrypted mnemonic storage instead of plaintext
 - local transaction creation before external processing
-- webhook event persistence for auditing
+- provider payload persistence inside transaction metadata
 - unique transaction indexes on `externalId` and `txId`
 - duplicate deposit protection in blockchain webhook handling
 - retry tracking for transaction and webhook failures
@@ -667,7 +629,7 @@ What is needed:
 It is accurate to say:
 
 - the project has a working crypto payment flow built with Tatum and Transak
-- it tracks deposits, withdrawals, sweeps, and webhook deliveries
+- it tracks deposits, withdrawals, sweeps, and webhook state in transactions
 - it uses encrypted mnemonic storage, webhook verification, and transaction indexing
 - it is suitable as a development or staging payment foundation
 
@@ -692,8 +654,8 @@ It is not yet accurate to say:
 
 ## Short technical summary
 
-This payment system follows a custodial Tron wallet architecture. User wallets are created through Tatum, on-ramp and off-ramp flows are handled through Transak, and internal balances are maintained in MongoDB using `Wallet`, `Transaction`, and `WebhookEvent` models. Deposits are first tracked locally, then finalized through provider and blockchain webhooks, and confirmed user deposits can be swept into a central admin treasury wallet. The strongest parts of the implementation are local transaction tracking, webhook verification, stateful processing, and audit-oriented event storage. The main weaknesses are server-side key custody, floating-point money handling, incomplete reconciliation, and missing production-grade compliance and abuse protections.
+This payment system follows a custodial Tron wallet architecture. User wallets are created through Tatum, on-ramp and off-ramp flows are handled through Transak, and internal balances are maintained in MongoDB using `Wallet` and `Transaction` models. Deposits are first tracked locally, then finalized through provider and blockchain webhooks, and confirmed user deposits can be swept into a central admin treasury wallet. The strongest parts of the implementation are local transaction tracking, webhook verification, stateful processing, and transaction-level audit data. The main weaknesses are server-side key custody, floating-point money handling, incomplete reconciliation, and missing production-grade compliance and abuse protections.
 
 ## Suggested statement for client or team discussion
 
-This project currently uses Tatum for Tron wallet generation and blockchain transfers, and Transak for fiat on-ramp and off-ramp flows. Internal balances, payment transactions, and webhook deliveries are stored in MongoDB through dedicated `Wallet`, `Transaction`, and `WebhookEvent` models. Deposits are created locally before external processing, then finalized through provider and blockchain webhooks, and confirmed user deposits can be swept into an admin treasury wallet. The implementation is a strong development-stage payment base, but before real-money production it still needs stronger key management, integer-based accounting, stricter withdrawal validation, broader transactional consistency, treasury reconciliation, rate limiting, and compliance controls.
+This project currently uses Tatum for Tron wallet generation and blockchain transfers, and Transak for fiat on-ramp and off-ramp flows. Internal balances and payment transactions are stored in MongoDB through dedicated `Wallet` and `Transaction` models, with provider and blockchain payloads embedded in transaction metadata. Deposits are created locally before external processing, then finalized through provider and blockchain webhooks, and confirmed user deposits can be swept into an admin treasury wallet. The implementation is a strong development-stage payment base, but before real-money production it still needs stronger key management, integer-based accounting, stricter withdrawal validation, broader transactional consistency, treasury reconciliation, rate limiting, and compliance controls.

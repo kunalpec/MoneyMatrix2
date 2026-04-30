@@ -124,3 +124,125 @@ curl -X POST "https://delphia-synostotic-fletcher.ngrok-free.dev/api/v1/webhook/
 curl -X POST "https://delphia-synostotic-fletcher.ngrok-free.dev/api/v1/webhook/transak" \
 -H "Content-Type: application/json" \
 -d '{"data":"your_real_jwt","eventID":"ORDER_COMPLETED","webhookData":{"id":"ord_123","status":"COMPLETED","cryptoAmount":"10","cryptoCurrency":"USDT","walletAddress":"TJv25FCA2bwLeJHs8op1duVkWkucGyswPF"}}'
+
+-----------------------------------------------------------------------------
+
+✅ CORRECTED MINIMAL MODELS - 5 Core Collections Only****
+DELETE these 2 collections immediately:
+
+❌ webhookevents
+
+❌ processedtxes
+
+KEEP these 5 only:
+
+text
+✅ admin       → Admin users/settings
+✅ bets        → Game bets (core gaming)
+✅ gamerounds  → Game rounds (game state)
+✅ transactions → ALL deposits/withdrawals (Transak+Tatum unified)
+✅ users       → User accounts
+✅ wallets     → User balances only
+🎯 PERFECT 5-COLLECTION ARCHITECTURE
+text
+┌─────────────────┐    ┌──────────────────┐    ┌──────────────┐
+│    users        │◄──►│   transactions   │◄──►│    wallets   │
+└─────────┬───────┘    └──────────┬───────┘    └────────────┘
+          │                       │
+          ▼                       ▼
+┌─────────┼───────┐    ┌──────────┼────────┐
+│   admin │ bets  │    │ gamerounds│  users │
+└─────────┴───────┘    └──────────┴────────┘
+🚀 transactions = YOUR SINGLE SOURCE OF TRUTH
+javascript
+// Example - Handles ALL webhook events perfectly
+{
+  type: "DEPOSIT",
+  provider: "TRANSAK",           // Transak webhook → sets this
+  externalId: "transak_order_id",
+  txId: "blockchain_tx_id",      // Tatum webhook → sets this
+  metadata: {
+    transak: {...},              // Transak ORDER_COMPLETED
+    tatum: {...}                 // Tatum INCOMING_NATIVE_TX
+  },
+  status: "SUCCESS",             // PENDING → PROCESSING → SUCCESS
+  processed: true
+}
+✅ IMMEDIATE ACTION PLAN
+bash
+# 1. DELETE unnecessary collections
+mongo moneymatrix
+> db.webhookevents.drop()
+> db.processedtxes.drop()
+
+# 2. Create indexes on transactions (5 seconds)
+db.transactions.createIndex({"userId":1, "type":1, "status":1})
+db.transactions.createIndex({"externalId":1, "provider":1})
+db.transactions.createIndex({"txId":1, "type":1})
+
+# 3. Your webhook handlers already work perfectly
+#    - Transak → transactions (PENDING)
+#    - Tatum → transactions (PROCESSING → SUCCESS) do this ok remove the useless model 2 models
+
+
+{
+  "_id": {
+    "$oid": "69ef6689dc0664b9fc57a11f"
+  },
+  "userId": {
+    "$oid": "69eb4c8f8654ae16eedb1396"
+  },
+  "type": "DEPOSIT",
+  "amount": 95.123456,
+  "amountSun": 95123456,
+  "status": "SUCCESS",
+  "provider": "TRANSAK",
+  "currency": "TRX",
+  "externalId": "987b07e3-d4e0-42ba-a909-3e0d47b5f82e",
+  "toAddress": "TJv25FCA2bwLeJHs8op1duVkWkucGyswPF",
+  "metadata": {
+    "transak": {
+      "provider": "TRANSAK",
+      "flow": "On-ramp",
+      "partnerOrderId": "987b07e3-d4e0-42ba-a909-3e0d47b5f82e",
+      "walletAddress": "TJv25FCA2bwLeJHs8op1duVkWkucGyswPF",
+      "cryptoCurrency": "TRX",
+      "fiatAmount": 100,
+      "fiatCurrency": "USD",
+      "countryCode": "US"
+    },
+    "tatum": {
+      "provider": "TATUM",
+      "subscriptionId": null,
+      "subscriptionType": "INCOMING_NATIVE_TX",
+      "chain": "tron-mainnet",
+      "asset": "TRON",
+      "txId": "a1b2c3d4e5f6789012345678901234567890abcdef12",
+      "address": "TJv25FCA2bwLeJHs8op1duVkWkucGyswPF",
+      "counterAddress": "TTransakHotWallet1234567890abcdef",
+      "amount": "95.123456",
+      "blockNumber": 652147
+    }
+  },
+  "processed": true,
+  "retryCount": 0,
+  "createdAt": {
+    "$date": "2026-04-27T13:37:13.611Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-27T13:44:12.605Z"
+  },
+  "__v": 0,
+  "lastError": null,
+  "lockedAt": null,
+  "completedAt": {
+    "$date": "2026-04-27T13:44:12.604Z"
+  },
+  "confirmedAt": {
+    "$date": "2026-04-27T13:44:12.604Z"
+  },
+  "processedAt": {
+    "$date": "2026-04-27T13:44:12.604Z"
+  },
+  "txId": "a1b2c3d4e5f6789012345678901234567890abcdef12"
+}

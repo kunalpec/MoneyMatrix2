@@ -1,0 +1,65 @@
+version: 3
+config:
+  target: "https://api.moneymatrixapp.com"
+  phases:
+    - duration: 60
+      arrivalRate: 10
+      name: "Warmup"
+    - duration: 120
+      arrivalRate: 50
+      name: "Ramp up"
+    - duration: 120
+      arrivalRate: 100
+      name: "Sustained"
+    - duration: 60
+      arrivalRate: 10
+      name: "Ramp down"
+
+scenarios:
+  - name: "User Login Flow"
+    flow:
+      - post:
+          url: "/api/v1/users/auth/login"
+          json:
+            email: "test@example.com"
+            password: "TestPassword123"
+          expect:
+            - statusCode: 200
+
+  - name: "Get User Profile"
+    flow:
+      - get:
+          url: "/api/v1/auth/me"
+          headers:
+            Authorization: "Bearer {{ token }}"
+          expect:
+            - statusCode: 200
+
+  - name: "Place Bet"
+    flow:
+      - post:
+          url: "/api/v1/wallet/transaction"
+          json:
+            amount: 100
+            transactionType: "bet"
+            description: "Test bet"
+          headers:
+            Authorization: "Bearer {{ token }}"
+          expect:
+            - statusCode: 200
+
+  - name: "Get Wallet Info"
+    flow:
+      - get:
+          url: "/api/v1/wallet/info"
+          headers:
+            Authorization: "Bearer {{ token }}"
+          expect:
+            - statusCode: 200
+
+  - name: "Health Check"
+    flow:
+      - get:
+          url: "/health"
+          expect:
+            - statusCode: 200

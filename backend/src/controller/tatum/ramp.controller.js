@@ -249,11 +249,6 @@ export const createOnRampUrl = AsyncHandler(async (req, res) => {
     amountSun: 0,
     provider: "TRANSAK",
     currency: TRX_CURRENCY,
-    metadata: {
-      fiatAmount: Number(fiatAmount),
-      fiatCurrency: String(fiatCurrency).toUpperCase(),
-      countryCode: String(countryCode).toUpperCase(),
-    },
   });
 
   // 3. Create hosted checkout URL
@@ -710,6 +705,7 @@ export const createOffRampUrl = AsyncHandler(async (req, res) => {
     amount,
     fiatCurrency = "INR",
     countryCode = "IN",
+    toAddress,
   } = req.body;
   const amountSun = trxToSun(amount, "Off-ramp amount");
 
@@ -720,8 +716,33 @@ export const createOffRampUrl = AsyncHandler(async (req, res) => {
   const externalId = crypto.randomUUID();
   const normalizedFiatCurrency = String(fiatCurrency).toUpperCase();
   const normalizedCountryCode = String(countryCode).toUpperCase();
+  const destinationAddress = await resolveUserTronDestinationAddress({
+    user,
+    toAddress,
+    label: "destination address",
+  });
 
   try {
+    const withdrawalTransaction = await reserveWithdrawalTransaction({
+      user,
+      amountSun,
+      destinationAddress,
+      provider: "TRANSAK",
+      currency: TRX_CURRENCY,
+      status: "PENDING",
+      externalId,
+      deductUserBalance: true,
+      metadata: {
+        transak: {
+          provider: "TRANSAK",
+          flow: "Off-ramp",
+          partnerOrderId: externalId,
+          fiatCurrency: normalizedFiatCurrency,
+          countryCode: normalizedCountryCode,
+        },
+      },
+    });
+
     const url = await buildTransakOffRampWidgetUrl({
       user,
       externalId,
@@ -739,11 +760,18 @@ export const createOffRampUrl = AsyncHandler(async (req, res) => {
         url,
         widgetUrl: url,
         orderId: externalId,
-        note:
-          "This only opens the external Transak sell flow. It does not withdraw or reserve in-game TRX.",
+        transactionId: withdrawalTransaction._id,
       })
     );
   } catch (error) {
+    await rollbackReservedWithdrawal({
+      user,
+      amountSun,
+      transactionFilter: { externalId, type: "WITHDRAW" },
+      error,
+      refundUserBalance: true,
+    }).catch(() => {});
+
     throw error;
   }
 });

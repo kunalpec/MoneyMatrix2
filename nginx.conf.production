@@ -1,0 +1,163 @@
+# Nginx configuration for MoneyMatrix Production Backend
+# Place this in: /etc/nginx/sites-available/moneymatrix
+# Then symlink to: /etc/nginx/sites-enabled/moneymatrix
+
+upstream backend {
+    # Connect to Node.js backend with PM2 clustering
+    server localhost:8000 max_fails=3 fail_timeout=30s;
+    
+    # Add more servers if using multiple machines
+    # server 192.168.1.2:8000 max_fails=3 fail_timeout=30s;
+    # server 192.168.1.3:8000 max_fails=3 fail_timeout=30s;
+    
+    # Health check configuration
+    keepalive 64;
+}
+
+# HTTP redirect to HTTPS
+server {
+    listen 80;
+    listen [::]:80;
+    server_name api.moneymatrixapp.com;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://$server_name$request_uri;
+    }
+}
+
+# HTTPS Main Server
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name api.moneymatrixapp.com;
+
+    # SSL Certificates (Let's Encrypt)
+    ssl_certificate /etc/letsencrypt/live/api.moneymatrixapp.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.moneymatrixapp.com/privkey.pem;
+
+    # SSL Security
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+
+    # HSTS
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    # Request size limit
+    client_max_body_size 10M;
+
+    # Gzip compression
+    gzip on;
+    gzip_types text/plain text/css text/javascript application/json application/javascript;
+    gzip_min_length 1000;
+    gzip_proxied any;
+
+    # Logging
+    access_log /var/log/nginx/moneymatrix_access.log combined buffer=32k flush=5s;
+    error_log /var/log/nginx/moneymatrix_error.log warn;
+
+    # Rate limiting
+    limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
+    limit_req_zone $binary_remote_addr zone=auth_limit:10m rate=2r/m;
+    limit_req_zone $binary_remote_addr zone=webhook_limit:10m rate=100r/s;
+
+    # WebSocket support
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        '' close;
+    }
+
+    # Health check endpoint (no rate limiting)
+    location /health {
+        proxy_pass http://backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        access_log off;
+    }
+
+    # Webhook endpoints (higher rate limit)
+    location /api/v1/webhook {
+        limit_req zone=webhook_limit burst=200 nodelay;
+        
+        proxy_pass http://backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+    # Auth endpoints (strict rate limiting)
+    location /api/v1/users/auth {
+        limit_req zone=auth_limit burst=3 nodelay;
+        
+        proxy_pass http://backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # API endpoints (general rate limiting)
+    location /api/ {
+        limit_req zone=api_limit burst=50 nodelay;
+        
+        proxy_pass http://backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+    # Static files caching
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+        proxy_pass http://backend;
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # Default location
+    location / {
+        proxy_pass http://backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+    # Deny access to sensitive files
+    location ~ /\. {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+}

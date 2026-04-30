@@ -1,7 +1,7 @@
 import express from "express";
 import {
+  createTransakWebhookJwt,
   getTransakAccessToken,
-  getTransakWebhookSignature,
 } from "../controller/tatum/transak.controller.js";
 import { requireRole, verifyJWT } from "../middleware/auth.middleware.js";
 
@@ -17,22 +17,36 @@ const escapeHtml = (value) =>
 
 const ensureAdmin = [verifyJWT, requireRole("admin")];
 
-router.post("/signature", ...ensureAdmin, getTransakWebhookSignature);
+router.post("/jwt-token", ...ensureAdmin, createTransakWebhookJwt);
 router.get("/token", ...ensureAdmin, getTransakAccessToken);
 
 const firstValue = (...values) =>
   values.find((value) => value !== undefined && value !== null && value !== "");
 
-const buildSuccessMetadata = (query, flowLabel) => ({
-  provider: "TRANSAK",
-  flow: flowLabel,
-  orderId: firstValue(query.orderId, query.order_id),
-  partnerOrderId: firstValue(query.partnerOrderId, query.partner_order_id),
-  status: query.status,
-  cryptoAmount: firstValue(query.cryptoAmount, query.crypto_amount),
-  fiatAmount: firstValue(query.fiatAmount, query.fiat_amount),
-  walletAddress: firstValue(query.walletAddress, query.wallet_address),
-});
+const compactObject = (value) =>
+  Object.fromEntries(
+    Object.entries(value).filter(
+      ([, fieldValue]) =>
+        fieldValue !== undefined &&
+        fieldValue !== null &&
+        fieldValue !== ""
+    )
+  );
+
+const buildSuccessMetadata = (query, flowLabel) =>
+  compactObject({
+    provider: "TRANSAK",
+    flow: flowLabel,
+    eventId: firstValue(query.eventId, query.eventID),
+    eventID: firstValue(query.eventID, query.eventId),
+    orderId: firstValue(query.orderId, query.order_id),
+    partnerOrderId: firstValue(query.partnerOrderId, query.partner_order_id),
+    status: firstValue(query.status),
+    fiatAmount: firstValue(query.fiatAmount, query.fiat_amount),
+    fiatCurrency: firstValue(query.fiatCurrency, query.fiat_currency),
+    countryCode: firstValue(query.countryCode, query.country_code),
+    walletAddress: firstValue(query.walletAddress, query.wallet_address),
+  });
 
 const renderTransakSuccessPage = (flowLabel) => async (req, res, next) => {
   const {

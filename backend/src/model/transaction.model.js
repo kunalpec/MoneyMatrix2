@@ -7,14 +7,12 @@ const transactionSchema = new mongoose.Schema(
       ref: "User",
       index: true,
     },
-
     type: {
       type: String,
       enum: ["DEPOSIT", "WITHDRAW", "SWEEP"],
       required: true,
       index: true,
     },
-
     amount: {
       type: Number,
       default: 0,
@@ -29,80 +27,96 @@ const transactionSchema = new mongoose.Schema(
         message: "amountSun must be an integer",
       },
     },
-
+    fee: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
     status: {
       type: String,
-      enum: ["PENDING", "LOCKED", "PROCESSING", "SUCCESS", "FAILED"],
+      enum: ["PENDING", "LOCKED", "PROCESSING", "SUCCESS", "COMPLETED", "FAILED"],
       default: "PENDING",
       index: true,
     },
-
     provider: {
       type: String,
       enum: ["TRANSAK", "TATUM", "SYSTEM", null],
       default: null,
       index: true,
     },
-
     currency: {
       type: String,
-      enum: ["TRX", "TRC20", "TRON", null, 'USDT', 'USDC'],  // Add "TRON"
+      enum: ["TRX", "TRC20", "TRON", "USDT", "USDC", null],
       default: "TRX",
     },
-
-    // 🔗 Blockchain / external references
     txId: {
       type: String,
+      default: null,
       trim: true,
     },
-
     externalId: {
-      type: String, // partnerOrderId (Transak)
+      type: String,
+      default: null,
       trim: true,
     },
-
     providerOrderId: {
-      type: String, // Transak orderId/order_id
+      type: String,
+      default: null,
       trim: true,
       index: true,
     },
-
-    // 💸 Addresses
-    fromAddress: String,
-    toAddress: String,
-
-    // 🧠 Store raw webhook / provider data
+    fromAddress: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    toAddress: {
+      type: String,
+      default: null,
+      trim: true,
+    },
     metadata: {
       type: mongoose.Schema.Types.Mixed,
+      default: undefined,
     },
-
-    // 🔁 retry / idempotency
     processed: {
       type: Boolean,
       default: false,
       index: true,
     },
-
     retryCount: {
       type: Number,
       default: 0,
       min: 0,
     },
-
-    lastError: String,
-    lockedAt: Date,
-    processedAt: Date,
-
-    // ⏱ timestamps
-    confirmedAt: Date,
-    completedAt: Date,
+    lastError: {
+      type: String,
+      default: null,
+    },
+    lockedAt: {
+      type: Date,
+      default: null,
+    },
+    processedAt: {
+      type: Date,
+      default: null,
+    },
+    confirmedAt: {
+      type: Date,
+      default: null,
+    },
+    completedAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
+    collection: "transactions",
     timestamps: true,
+    minimize: false,
   }
 );
 
-// 🔐 Prevent duplicate externalId (important for Transak)
 transactionSchema.index(
   { externalId: 1 },
   {
@@ -113,7 +127,6 @@ transactionSchema.index(
   }
 );
 
-// 🔐 Prevent duplicate txId (blockchain safety)
 transactionSchema.index(
   { txId: 1 },
   {
@@ -123,5 +136,10 @@ transactionSchema.index(
     },
   }
 );
+
+transactionSchema.index({ userId: 1, type: 1, status: 1 });
+transactionSchema.index({ externalId: 1, provider: 1 });
+transactionSchema.index({ txId: 1, type: 1 });
+transactionSchema.index({ type: 1, provider: 1, status: 1, createdAt: -1 });
 
 export const Transaction = mongoose.model("Transaction", transactionSchema);

@@ -2,8 +2,6 @@ import { Transaction } from "../model/transaction.model.js";
 import { tatumClient } from "../controller/tatum/client.controller.js";
 import { trxToSun } from "../util/trxAmount.util.js";
 import { logger } from "../util/logger.util.js";
-import { processConfirmedDeposit } from "./payment/deposit.service.js";
-
 let depositPollTimer = null;
 
 const getPollIntervalMs = () =>
@@ -121,24 +119,10 @@ const pollOnce = async () => {
         continue;
       }
 
-      const result = await processConfirmedDeposit({
-        provider: "TATUM",
-        txHash,
-        address: deposit.toAddress,
-        amountSun,
-        providerExternalId: deposit.externalId || null,
-        currency: "TRX",
-        payload: {
-          poller: true,
-          chainTransaction: matchingTransaction,
-        },
-        source: "POLLING",
-      });
-
-      logger.info("deposit.poller.match", {
+      logger.info("deposit.poller.match_detected", {
         transactionId: deposit._id.toString(),
         txHash,
-        responseMessage: result.responseMessage,
+        note: "Settlement skipped because wallet credit is webhook-only",
       });
     } catch (error) {
       logger.error("deposit.poller.error", {

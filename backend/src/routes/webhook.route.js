@@ -1,5 +1,6 @@
 import { Router } from "express";
 import {
+  createTatumWebhookHmac,
   tronWebhook,
   transakWebhook,
 } from "../controller/tatum/webhook.controller.js";
@@ -61,6 +62,17 @@ const router = Router();
 
 router.post("/tatum/address", tronWebhook);
 router.post("/transak", transakWebhook);
+
+
+
+// postman only 
+router.post(
+  "/tatum/hmac",
+  verifyJWT,
+  requireRole("admin"),
+  createTatumWebhookHmac
+);
+
 router.post(
   "/tatum/register-webhook",
   verifyJWT,
