@@ -102,6 +102,10 @@ export const inputSanitizer = (req, res, next) => {
             "`": "\\`",
           }[match];
         });
+    } else if (Array.isArray(obj)) {
+      for (let index = 0; index < obj.length; index += 1) {
+        obj[index] = sanitize(obj[index]);
+      }
     } else if (typeof obj === "object" && obj !== null) {
       Object.keys(obj).forEach((key) => {
         obj[key] = sanitize(obj[key]);
@@ -110,9 +114,9 @@ export const inputSanitizer = (req, res, next) => {
     return obj;
   };
 
-  req.body = sanitize(req.body);
-  req.query = sanitize(req.query);
-  req.params = sanitize(req.params);
+  sanitize(req.body);
+  sanitize(req.query);
+  sanitize(req.params);
 
   next();
 };

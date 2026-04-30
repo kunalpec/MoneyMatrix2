@@ -16,6 +16,7 @@ import {
   getConfiguredTronTransferCurrency,
   submitTatumTronTransfer,
 } from "../../util/tronTransfer.util.js";
+import { createTransactionMetadata } from "./transactionMetadata.service.js";
 
 const getReservedWithdrawalAmountSun = (transaction) => {
   const requestedAmountSun = transaction?.metadata?.requestedAmountSun;
@@ -26,41 +27,6 @@ const getReservedWithdrawalAmountSun = (transaction) => {
 
   return transaction?.amountSun || 0;
 };
-
-const buildWithdrawalTatumMetadata = ({
-  existingMetadata = {},
-  txId = null,
-  fromAddress = null,
-  toAddress = null,
-  amount = null,
-  fee = null,
-  blockNumber = null,
-  timestamp = null,
-  subscriptionType = "OUTGOING_NATIVE_TX",
-  chain = "tron-mainnet",
-}) => ({
-  ...(existingMetadata && typeof existingMetadata === "object"
-    ? existingMetadata
-    : {}),
-  tatum: {
-    ...((existingMetadata &&
-      typeof existingMetadata === "object" &&
-      existingMetadata.tatum &&
-      typeof existingMetadata.tatum === "object")
-      ? existingMetadata.tatum
-      : {}),
-    provider: "TATUM",
-    subscriptionType,
-    chain,
-    ...(txId ? { txId } : {}),
-    ...(fromAddress ? { fromAddress } : {}),
-    ...(toAddress ? { toAddress } : {}),
-    ...(amount !== null && amount !== undefined ? { amount } : {}),
-    ...(fee !== null && fee !== undefined ? { fee } : {}),
-    ...(blockNumber !== null && blockNumber !== undefined ? { blockNumber } : {}),
-    ...(timestamp ? { timestamp } : {}),
-  },
-});
 
 export const reserveWithdrawalTransaction = async ({
   user,
@@ -111,12 +77,20 @@ export const reserveWithdrawalTransaction = async ({
             toAddress: destinationAddress,
             provider,
             currency,
-            metadata: {
-              ...metadata,
-              requestedAmountSun: amountSun,
-              requestedAmount: Number(sunToTrx(amountSun)),
-              reservedFromUserBalance: deductUserBalance,
-            },
+            metadata: createTransactionMetadata({
+              extra: {
+                ...(metadata && typeof metadata === "object" ? metadata : {}),
+                requestedAmountSun: amountSun,
+                requestedAmount: Number(sunToTrx(amountSun)),
+                reservedFromUserBalance: deductUserBalance,
+              },
+              transak:
+                provider === "TRANSAK" && metadata?.transak
+                  ? metadata.transak
+                  : undefined,
+              tatum:
+                provider === "TATUM" && metadata?.tatum ? metadata.tatum : undefined,
+            }),
           },
         ],
         { session }
@@ -336,16 +310,23 @@ export const processQueuedWithdrawal = async ({ transactionId }) => {
           currency: getConfiguredTronTransferCurrency({
             tokenAddress: lockedTransaction.metadata?.tokenAddress,
           }),
-          metadata: buildWithdrawalTatumMetadata({
+          metadata: createTransactionMetadata({
             existingMetadata: lockedTransaction.metadata,
-            txId: response.data.txId,
-            fromAddress: adminWallet.address,
-            toAddress: lockedTransaction.toAddress,
-            amount: sunToTrx(getReservedWithdrawalAmountSun(lockedTransaction)).toString(),
-            fee:
-              response?.data?.fee !== undefined && response?.data?.fee !== null
-                ? String(response.data.fee)
-                : null,
+            tatum: {
+              provider: "TATUM",
+              subscriptionType: "OUTGOING_NATIVE_TX",
+              chain: "tron-mainnet",
+              txId: response.data.txId,
+              fromAddress: adminWallet.address,
+              toAddress: lockedTransaction.toAddress,
+              amount: sunToTrx(
+                getReservedWithdrawalAmountSun(lockedTransaction)
+              ).toString(),
+              fee:
+                response?.data?.fee !== undefined && response?.data?.fee !== null
+                  ? String(response.data.fee)
+                  : null,
+            },
           }),
           lastError: null,
         },

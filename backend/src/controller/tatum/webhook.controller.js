@@ -24,6 +24,10 @@ import {
   parseBufferedJsonBody,
   verifyTatumHMAC,
 } from "../../middleware/rawBody.middleware.js";
+import {
+  buildFinalSuccessMetadata,
+  createTransactionMetadata,
+} from "../../service/payment/transactionMetadata.service.js";
 
 const MAX_WEBHOOK_RETRIES = Number(process.env.WEBHOOK_MAX_RETRIES || 5);
 const MIN_TRON_CONFIRMATIONS = Number(process.env.MIN_TRON_CONFIRMATIONS || 1);
@@ -295,10 +299,10 @@ const verifyTransakSignature = (req) => {
 
 // ======== Verify Tatum Secret (9) ==========================================================================
 const verifyTatum = (req) => {
-  return;
   const hmacSecret = process.env.TATUM_WEBHOOK_HMAC_SECRET;
   if (!hmacSecret) {
-    throw new ApiError(500, "TATUM_WEBHOOK_HMAC_SECRET is not configured");
+    parseBufferedJsonBody(req);
+    return;
   }
 
   if (!req.headers["x-payload-hash"]) {
@@ -438,7 +442,10 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
             ...(transakOrderId ? { providerOrderId: transakOrderId } : {}),
             ...(existingTx?.type === "WITHDRAW"
               ? {
-                  "metadata.transak": buildTransakMetadata(data),
+                  metadata: createTransactionMetadata({
+                    existingMetadata: existingTx?.metadata,
+                    transak: buildTransakMetadata(data),
+                  }),
                   currency: parseCurrency(data),
                 }
               : {}),
@@ -487,6 +494,8 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
           TRANSAK_SUCCESS_EVENTS.has(eventType) &&
           existingTx.status === "SUCCESS"
         ) {
+          const transakMetadata = buildTransakMetadata(data);
+
           await Transaction.updateOne(
             { _id: existingTx._id, type: "WITHDRAW", status: "SUCCESS" },
             {
@@ -498,13 +507,22 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
                         transakOrderId || existingTx.providerOrderId,
                     }
                   : {}),
-                metadata: {
-                  ...(existingTx.metadata &&
-                  typeof existingTx.metadata === "object"
-                    ? existingTx.metadata
-                    : {}),
-                  transak: buildTransakMetadata(data),
-                },
+                metadata: createTransactionMetadata({
+                  existingMetadata: existingTx.metadata,
+                  transak: transakMetadata,
+                  success: buildFinalSuccessMetadata({
+                    transaction: {
+                      ...existingTx.toObject(),
+                      provider: "TRANSAK",
+                      providerOrderId:
+                        transakOrderId || existingTx.providerOrderId,
+                      status: "COMPLETED",
+                    },
+                    status: "COMPLETED",
+                    transakMetadata,
+                    tatumMetadata: existingTx.metadata?.tatum || null,
+                  }),
+                }),
                 status: "COMPLETED",
                 completedAt: new Date(),
                 lastError: null,
@@ -555,7 +573,10 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
               {
                 $set: {
                   ...commonUpdate,
-                  "metadata.transak": buildTransakMetadata(data),
+                  metadata: createTransactionMetadata({
+                    existingMetadata: lockedTx.metadata,
+                    transak: buildTransakMetadata(data),
+                  }),
                   status: "PENDING",
                 },
               },
@@ -578,10 +599,22 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
             {
               $set: {
                 ...commonUpdate,
-                metadata: {
-                  ...existingMetadata,
+                metadata: createTransactionMetadata({
+                  existingMetadata,
                   transak: finalizedTransakMetadata,
-                },
+                  success: buildFinalSuccessMetadata({
+                    transaction: {
+                      ...lockedTx.toObject(),
+                      provider: "TRANSAK",
+                      providerOrderId:
+                        transakOrderId || lockedTx.providerOrderId,
+                      status: "COMPLETED",
+                    },
+                    status: "COMPLETED",
+                    transakMetadata: finalizedTransakMetadata,
+                    tatumMetadata: existingMetadata.tatum || null,
+                  }),
+                }),
                 status: "COMPLETED",
                 processed: true,
                 processedAt: new Date(),
@@ -615,7 +648,10 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
               ...commonUpdate,
               ...(lockedTx.type === "WITHDRAW"
                 ? {
-                    "metadata.transak": buildTransakMetadata(data),
+                    metadata: createTransactionMetadata({
+                      existingMetadata: lockedTx.metadata,
+                      transak: buildTransakMetadata(data),
+                    }),
                     currency: parseCurrency(data),
                   }
                 : {}),
@@ -884,12 +920,23 @@ const handleTatumWithdrawWebhook = async (req, res) => {
               ...(feeValue !== null && Number.isFinite(feeValue)
                 ? { fee: feeValue }
                 : {}),
-              metadata: {
-                ...(lockedTx.metadata && typeof lockedTx.metadata === "object"
-                  ? lockedTx.metadata
-                  : {}),
+              metadata: createTransactionMetadata({
+                existingMetadata: lockedTx.metadata,
                 tatum: tatumMetadata,
-              },
+                success: buildFinalSuccessMetadata({
+                  transaction: {
+                    ...lockedTx.toObject(),
+                    fee:
+                      feeValue !== null && Number.isFinite(feeValue)
+                        ? feeValue
+                        : lockedTx.fee,
+                    status: lockedTx.provider === "TRANSAK" ? "SUCCESS" : "COMPLETED",
+                  },
+                  status: lockedTx.provider === "TRANSAK" ? "SUCCESS" : "COMPLETED",
+                  transakMetadata: lockedTx.metadata?.transak || null,
+                  tatumMetadata,
+                }),
+              }),
             },
           },
           { session }
@@ -915,17 +962,6 @@ const handleTatumWithdrawWebhook = async (req, res) => {
 
 // ======== Tron Address Webhook Handler (23) ========
 export const tronWebhook = AsyncHandler(async (req, res) => {
-  req.body = {
-    "currency": "TRON",
-    "address": "TJv25FCA2bwLeJHs8op1duVkWkucGyswPF",
-    "blockNumber": 652147,
-    "counterAddress": "TTransakHotWallet1234567890abcdef",
-    "txId": "a1b2c3d4e5f6789012345678901234567890abcdef12",
-    "chain": "tron-mainnet",
-    "subscriptionType": "INCOMING_NATIVE_TX",
-    "amount": "95.123456"
-  }
-
   verifyTatum(req);
   console.log("📩 Tatum webhook received:", req.body);
   const txId = parseTatumTxId(req.body);

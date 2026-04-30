@@ -1,5 +1,11 @@
 import mongoose from "mongoose";
 
+const buildDefaultMetadata = () => ({
+  transak: null,
+  tatum: null,
+  success: null,
+});
+
 const transactionSchema = new mongoose.Schema(
   {
     userId: {
@@ -77,7 +83,7 @@ const transactionSchema = new mongoose.Schema(
     },
     metadata: {
       type: mongoose.Schema.Types.Mixed,
-      default: undefined,
+      default: buildDefaultMetadata,
     },
     processed: {
       type: Boolean,

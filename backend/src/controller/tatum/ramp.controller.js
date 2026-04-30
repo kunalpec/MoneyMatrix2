@@ -32,6 +32,7 @@ import {
   getConfiguredTronTransferCurrency,
   submitTatumTronTransfer,
 } from "../../util/tronTransfer.util.js";
+import { createTransactionMetadata } from "../../service/payment/transactionMetadata.service.js";
 
 const TRX_CURRENCY = "TRX";
 
@@ -194,9 +195,11 @@ const createSweepTransactionDoc = async ({
       currency: getConfiguredTronTransferCurrency(),
       status: "PENDING",
       processed: false,
-      metadata: {
-        tokenAddress: getConfiguredTronTokenAddress(),
-      },
+      metadata: createTransactionMetadata({
+        extra: {
+          tokenAddress: getConfiguredTronTokenAddress(),
+        },
+      }),
     },
   ];
 
@@ -249,6 +252,17 @@ export const createOnRampUrl = AsyncHandler(async (req, res) => {
     amountSun: 0,
     provider: "TRANSAK",
     currency: TRX_CURRENCY,
+    metadata: createTransactionMetadata({
+      transak: {
+        provider: "TRANSAK",
+        flow: "On-ramp",
+        partnerOrderId: externalId,
+        walletAddress: wallet.address,
+        fiatAmount: Number(fiatAmount),
+        fiatCurrency: String(fiatCurrency).toUpperCase(),
+        countryCode: String(countryCode).toUpperCase(),
+      },
+    }),
   });
 
   // 3. Create hosted checkout URL

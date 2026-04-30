@@ -13,27 +13,12 @@ import {
   getConfiguredTronTokenAddress,
   getConfiguredTronTransferCurrency,
 } from "../../util/tronTransfer.util.js";
+import {
+  buildFinalSuccessMetadata,
+  createTransactionMetadata,
+} from "./transactionMetadata.service.js";
 
 const MAX_WEBHOOK_RETRIES = Number(process.env.WEBHOOK_MAX_RETRIES || 5);
-
-const buildTransactionMetadata = ({
-  existingMetadata = {},
-  provider,
-  payload = {},
-}) => {
-  const providerKey = String(provider || "").trim().toLowerCase();
-
-  if (!providerKey) {
-    return existingMetadata;
-  }
-
-  return {
-    ...(existingMetadata && typeof existingMetadata === "object"
-      ? existingMetadata
-      : {}),
-    [providerKey]: payload,
-  };
-};
 
 const normalizeDepositCurrency = (currency) => {
   const normalizedCurrency = String(currency || "TRX").trim().toUpperCase();
@@ -115,9 +100,11 @@ const createSweepPlaceholder = async ({
         externalId: `SWEEP:${sourceTxId}`,
         status: "PENDING",
         processed: false,
-        metadata: {
-          tokenAddress: getConfiguredTronTokenAddress(),
-        },
+        metadata: createTransactionMetadata({
+          extra: {
+            tokenAddress: getConfiguredTronTokenAddress(),
+          },
+        }),
       },
     ],
     { session }
@@ -270,9 +257,8 @@ export const processConfirmedDeposit = async ({
               toAddress: address,
               status: "PROCESSING",
               processed: false,
-              metadata: buildTransactionMetadata({
-                provider,
-                payload,
+              metadata: createTransactionMetadata({
+                tatum: payload,
               }),
             },
           ],
@@ -363,10 +349,25 @@ export const processConfirmedDeposit = async ({
             completedAt: new Date(),
             lockedAt: null,
             lastError: null,
-            metadata: buildTransactionMetadata({
+            metadata: createTransactionMetadata({
               existingMetadata: lockedTx.metadata,
-              provider,
-              payload,
+              tatum: payload,
+              success: buildFinalSuccessMetadata({
+                transaction: {
+                  ...lockedTx.toObject(),
+                  provider: lockedTx.provider || provider,
+                  currency: lockedTx.currency || normalizedCurrency,
+                  txId: txHash,
+                  externalId: providerExternalId || lockedTx.externalId,
+                  toAddress: lockedTx.toAddress || address,
+                  amount: amountSun / 1_000_000,
+                  amountSun,
+                  status: "SUCCESS",
+                },
+                status: "SUCCESS",
+                transakMetadata: lockedTx.metadata?.transak || null,
+                tatumMetadata: payload,
+              }),
             }),
           },
         },
