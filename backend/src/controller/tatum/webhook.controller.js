@@ -9,6 +9,7 @@ import { executePendingSweep } from "./ramp.controller.js";
 import { getVerifiedTransakWebhookPayload } from "./transak.controller.js";
 import {
   buildBalanceIncrementFromSun,
+  buildLockedBalanceIncrementFromSun,
   trxToSun,
 } from "../../util/trxAmount.util.js";
 import {
@@ -28,9 +29,22 @@ import {
   buildFinalSuccessMetadata,
   createTransactionMetadata,
 } from "../../service/payment/transactionMetadata.service.js";
+import { getRedisConnection } from "../../queue/redis.connection.js";
 
 const MAX_WEBHOOK_RETRIES = Number(process.env.WEBHOOK_MAX_RETRIES || 5);
 const MIN_TRON_CONFIRMATIONS = Number(process.env.MIN_TRON_CONFIRMATIONS || 1);
+const WEBHOOK_IDEMPOTENCY_TTL_MS = Number(
+  process.env.WEBHOOK_IDEMPOTENCY_TTL_MS || 300000
+);
+const WITHDRAWAL_WALLET_LOCK_TTL_MS = Number(
+  process.env.WITHDRAWAL_WALLET_LOCK_TTL_MS || 300000
+);
+const WITHDRAWAL_WALLET_LOCK_WAIT_MS = Number(
+  process.env.WITHDRAWAL_WALLET_LOCK_WAIT_MS || 5000
+);
+const WITHDRAWAL_WALLET_LOCK_RETRY_MS = Number(
+  process.env.WITHDRAWAL_WALLET_LOCK_RETRY_MS || 100
+);
 
 const TRANSAK_SUCCESS_EVENTS = new Set([
   "ORDER_COMPLETED",
@@ -373,6 +387,141 @@ const incrementTransactionRetry = async (filter, errorMessage) => {
   await tx.save();
 };
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const buildDepositWebhookIdempotencyKey = ({ txId, externalId }) =>
+  `idempotency:deposit:${txId || "na"}:${externalId || "na"}`;
+
+const getWalletLockKey = (walletId) => `lock:wallet:withdraw:${walletId}`;
+
+const acquireWalletRedisLock = async (walletId) => {
+  const redis = getRedisConnection();
+  const key = getWalletLockKey(walletId);
+  const token = crypto.randomUUID();
+  const deadline = Date.now() + WITHDRAWAL_WALLET_LOCK_WAIT_MS;
+
+  while (Date.now() < deadline) {
+    const result = await redis.set(
+      key,
+      token,
+      "PX",
+      WITHDRAWAL_WALLET_LOCK_TTL_MS,
+      "NX"
+    );
+
+    if (result === "OK") {
+      return { key, token };
+    }
+
+    await sleep(WITHDRAWAL_WALLET_LOCK_RETRY_MS);
+  }
+
+  throw new ApiError(423, "Wallet is busy processing another withdrawal");
+};
+
+const releaseWalletRedisLock = async (lock) => {
+  if (!lock?.key || !lock?.token) {
+    return;
+  }
+
+  const redis = getRedisConnection();
+
+  await redis.eval(
+    `
+      if redis.call("get", KEYS[1]) == ARGV[1] then
+        return redis.call("del", KEYS[1])
+      end
+      return 0
+    `,
+    1,
+    lock.key,
+    lock.token
+  );
+};
+
+const acquireDepositWebhookIdempotency = async ({ txId, externalId }) => {
+  const redis = getRedisConnection();
+  const key = buildDepositWebhookIdempotencyKey({ txId, externalId });
+  const token = crypto.randomUUID();
+  const result = await redis.set(
+    key,
+    token,
+    "PX",
+    WEBHOOK_IDEMPOTENCY_TTL_MS,
+    "NX"
+  );
+
+  return {
+    key,
+    token,
+    acquired: result === "OK",
+  };
+};
+
+const releaseDepositWebhookIdempotency = async (lock) => {
+  if (!lock?.key || !lock?.token) {
+    return;
+  }
+
+  const redis = getRedisConnection();
+
+  await redis.eval(
+    `
+      if redis.call("get", KEYS[1]) == ARGV[1] then
+        return redis.call("del", KEYS[1])
+      end
+      return 0
+    `,
+    1,
+    lock.key,
+    lock.token
+  );
+};
+
+const completeDepositWebhookIdempotency = async (lock) => {
+  if (!lock?.key) {
+    return;
+  }
+
+  const redis = getRedisConnection();
+  await redis.pexpire(lock.key, WEBHOOK_IDEMPOTENCY_TTL_MS);
+};
+
+const isWithdrawalReconciliationRequired = (transaction) =>
+  Boolean(transaction?.metadata?.reconciliationRequired);
+
+const getReservedWithdrawalAmountSun = (transaction) => {
+  const requestedAmountSun = transaction?.metadata?.requestedAmountSun;
+
+  if (Number.isSafeInteger(requestedAmountSun) && requestedAmountSun > 0) {
+    return requestedAmountSun;
+  }
+
+  return getTransactionAmountSun(transaction);
+};
+
+const buildWithdrawalRollbackIncrementFromSun = (amountSun) => ({
+  ...buildBalanceIncrementFromSun(amountSun),
+  ...buildLockedBalanceIncrementFromSun(-amountSun),
+});
+
+const buildWithdrawalFinalizeIncrementFromSun = (amountSun) =>
+  buildLockedBalanceIncrementFromSun(-amountSun);
+
+const resolveUserWalletLock = async (userId) => {
+  if (!userId) {
+    return null;
+  }
+
+  const wallet = await Wallet.findOne({ user: userId }).select({ _id: 1 });
+
+  if (!wallet?._id) {
+    return null;
+  }
+
+  return acquireWalletRedisLock(wallet._id.toString());
+};
+
 // ======== Lock Transaction (18) ========
 const lockTransaction = async ({ filter, session }) =>
   Transaction.findOneAndUpdate(
@@ -457,6 +606,7 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
     }
 
     let responseMessage = "Ignored";
+    let walletLock = null;
 
     const session = await mongoose.startSession();
 
@@ -494,6 +644,42 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
           TRANSAK_SUCCESS_EVENTS.has(eventType) &&
           existingTx.status === "SUCCESS"
         ) {
+          if (
+            existingTx.metadata?.reservedFromUserBalance &&
+            existingTx.userId &&
+            !walletLock
+          ) {
+            walletLock = await resolveUserWalletLock(existingTx.userId);
+          }
+
+          if (
+            existingTx.metadata?.reservedFromUserBalance &&
+            existingTx.userId &&
+            existingTx.status !== "COMPLETED"
+          ) {
+            // Withdrawal success finalizes here for the provider-completed
+            // callback: locked balance is consumed and not refunded.
+            const wallet = await ensureWalletAccountingFields(
+              await Wallet.findOne({ user: existingTx.userId }).session(session),
+              session
+            );
+
+            await Wallet.updateOne(
+              {
+                _id: wallet._id,
+                trxLockedBalanceSun: {
+                  $gte: getReservedWithdrawalAmountSun(existingTx),
+                },
+              },
+              {
+                $inc: buildWithdrawalFinalizeIncrementFromSun(
+                  getReservedWithdrawalAmountSun(existingTx)
+                ),
+              },
+              { session }
+            );
+          }
+
           const transakMetadata = buildTransakMetadata(data);
 
           await Transaction.updateOne(
@@ -535,6 +721,19 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
           return;
         }
 
+        if (
+          existingTx.type === "WITHDRAW" &&
+          isWithdrawalReconciliationRequired(existingTx)
+        ) {
+          logger.warn("withdrawal.reconciliation_skip", {
+            transactionId: existingTx._id.toString(),
+            orderId,
+            eventType,
+          });
+          responseMessage = "Withdrawal awaiting reconciliation";
+          return;
+        }
+
         if (existingTx.processed) {
           responseMessage = "Already processed";
           return;
@@ -548,13 +747,32 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
         });
 
         if (!lockedTx) {
+          logger.info("webhook.transak.idempotent_skip", {
+            orderId,
+            eventType,
+            reason: "transaction already locked or processed",
+          });
           responseMessage = "Already processed";
           return;
         }
 
         if (lockedTx.processed) {
+          logger.info("webhook.transak.idempotent_skip", {
+            orderId,
+            eventType,
+            reason: "transaction already processed",
+          });
           responseMessage = "Already processed";
           return;
+        }
+
+        if (
+          lockedTx.type === "WITHDRAW" &&
+          lockedTx.metadata?.reservedFromUserBalance &&
+          lockedTx.userId &&
+          !walletLock
+        ) {
+          walletLock = await resolveUserWalletLock(lockedTx.userId);
         }
 
         const commonUpdate = {
@@ -594,6 +812,30 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
               ? lockedTx.metadata
               : {};
 
+          if (lockedTx.metadata?.reservedFromUserBalance && lockedTx.userId) {
+            // Withdrawal success finalizes here: provider succeeded, so the
+            // user's locked amount is consumed and stays deducted.
+            const wallet = await ensureWalletAccountingFields(
+              await Wallet.findOne({ user: lockedTx.userId }).session(session),
+              session
+            );
+
+            await Wallet.updateOne(
+              {
+                _id: wallet._id,
+                trxLockedBalanceSun: {
+                  $gte: getReservedWithdrawalAmountSun(lockedTx),
+                },
+              },
+              {
+                $inc: buildWithdrawalFinalizeIncrementFromSun(
+                  getReservedWithdrawalAmountSun(lockedTx)
+                ),
+              },
+              { session }
+            );
+          }
+
           await Transaction.updateOne(
             { _id: lockedTx._id, status: { $in: ["LOCKED", "SUCCESS"] } },
             {
@@ -628,15 +870,30 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
           return;
         }
 
-        if (lockedTx.type === "WITHDRAW" && lockedTx.userId) {
+        if (
+          lockedTx.type === "WITHDRAW" &&
+          lockedTx.userId &&
+          lockedTx.metadata?.reservedFromUserBalance
+        ) {
           const wallet = await ensureWalletAccountingFields(
             await Wallet.findOne({ user: lockedTx.userId }).session(session),
             session
           );
 
+          // Rollback happens here: provider reported failure, so we return the
+          // locked crypto to the user's spendable balance.
           await Wallet.updateOne(
-            { _id: wallet._id },
-            { $inc: buildBalanceIncrementFromSun(getTransactionAmountSun(lockedTx)) },
+            {
+              _id: wallet._id,
+              trxLockedBalanceSun: {
+                $gte: getReservedWithdrawalAmountSun(lockedTx),
+              },
+            },
+            {
+              $inc: buildWithdrawalRollbackIncrementFromSun(
+                getReservedWithdrawalAmountSun(lockedTx)
+              ),
+            },
             { session }
           );
         }
@@ -668,6 +925,7 @@ export const transakWebhook = AsyncHandler(async (req, res) => {
       });
     } finally {
       await session.endSession();
+      await releaseWalletRedisLock(walletLock);
     }
 
     return res.json(new ApiResponse(200, { orderId }, responseMessage));
@@ -800,7 +1058,26 @@ const handleTatumDepositWebhook = async (req, res) => {
   });
 
   if (existingProcessedTx) {
+    logger.info("webhook.tatum.deposit.idempotent_skip", {
+      txId,
+      externalId: providerExternalId,
+      reason: "deposit already processed",
+    });
     return res.json(new ApiResponse(200, { txId }, "Already processed"));
+  }
+
+  const depositIdempotencyLock = await acquireDepositWebhookIdempotency({
+    txId,
+    externalId: providerExternalId,
+  });
+
+  if (!depositIdempotencyLock.acquired) {
+    logger.info("webhook.tatum.deposit.idempotent_skip", {
+      txId,
+      externalId: providerExternalId,
+      reason: "idempotency lock already held",
+    });
+    return res.json(new ApiResponse(200, { txId }, "Already processing"));
   }
 
   try {
@@ -828,6 +1105,11 @@ const handleTatumDepositWebhook = async (req, res) => {
       responseMessage: result.responseMessage,
     });
 
+    // Deposit success is committed inside processConfirmedDeposit. At this
+    // point we keep the idempotency key alive briefly so duplicate webhooks
+    // return 200 without crediting the wallet twice.
+    await completeDepositWebhookIdempotency(depositIdempotencyLock);
+
     return res.json(
       new ApiResponse(
         200,
@@ -840,7 +1122,14 @@ const handleTatumDepositWebhook = async (req, res) => {
       )
     );
   } catch (error) {
+    await releaseDepositWebhookIdempotency(depositIdempotencyLock);
+
     if (isRetryableWriteConflict(error)) {
+      logger.info("webhook.tatum.deposit.idempotent_skip", {
+        txId,
+        externalId: providerExternalId,
+        reason: "retryable write conflict / already processing",
+      });
       return res.json(new ApiResponse(200, { txId }, "Already processing"));
     }
 
@@ -867,6 +1156,8 @@ const handleTatumWithdrawWebhook = async (req, res) => {
     throw new ApiError(400, "Missing txId");
   }
 
+  let walletLock = null;
+
   try {
     const session = await mongoose.startSession();
     let responseMessage = "Withdrawal confirmed on-chain";
@@ -885,6 +1176,20 @@ const handleTatumWithdrawWebhook = async (req, res) => {
           return;
         }
 
+        if (isWithdrawalReconciliationRequired(tx)) {
+          logger.warn("withdrawal.reconciliation_skip", {
+            transactionId: tx._id.toString(),
+            txId,
+            source: "tatum_withdraw_webhook",
+          });
+          responseMessage = "Withdrawal awaiting reconciliation";
+          return;
+        }
+
+        if (tx.metadata?.reservedFromUserBalance && tx.userId && !walletLock) {
+          walletLock = await resolveUserWalletLock(tx.userId);
+        }
+
         const lockedTx = await lockTransaction({
           filter: {
             _id: tx._id,
@@ -895,13 +1200,45 @@ const handleTatumWithdrawWebhook = async (req, res) => {
         });
 
         if (!lockedTx) {
+          logger.info("webhook.tatum.withdraw.idempotent_skip", {
+            txId,
+            reason: "transaction already locked or processed",
+          });
           responseMessage = "Already processed";
           return;
         }
 
         if (lockedTx.processed) {
+          logger.info("webhook.tatum.withdraw.idempotent_skip", {
+            txId,
+            reason: "transaction already processed",
+          });
           responseMessage = "Already processed";
           return;
+        }
+
+        if (lockedTx.metadata?.reservedFromUserBalance && lockedTx.userId) {
+          // Withdrawal success finalizes here: the payout is confirmed, so we
+          // consume the user's locked balance without refunding it.
+          const wallet = await ensureWalletAccountingFields(
+            await Wallet.findOne({ user: lockedTx.userId }).session(session),
+            session
+          );
+
+          await Wallet.updateOne(
+            {
+              _id: wallet._id,
+              trxLockedBalanceSun: {
+                $gte: getReservedWithdrawalAmountSun(lockedTx),
+              },
+            },
+            {
+              $inc: buildWithdrawalFinalizeIncrementFromSun(
+                getReservedWithdrawalAmountSun(lockedTx)
+              ),
+            },
+            { session }
+          );
         }
 
         await Transaction.updateOne(
@@ -944,6 +1281,7 @@ const handleTatumWithdrawWebhook = async (req, res) => {
       });
     } finally {
       await session.endSession();
+      await releaseWalletRedisLock(walletLock);
     }
 
     return res.json(new ApiResponse(200, { txId }, responseMessage));

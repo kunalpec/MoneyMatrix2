@@ -41,6 +41,22 @@ export const fetchLeaderboard = createAsyncThunk(
   }
 );
 
+export const fetchAdminWallet = createAsyncThunk(
+  "admin/fetchAdminWallet",
+  async (_, { getState, dispatch, rejectWithValue }) => {
+    try {
+      const response = await apiRequest("/admin/wallet", {
+        token: getState().auth.accessToken,
+        onAccessToken: (token) => dispatch(setAccessToken(token)),
+      });
+
+      return response?.data;
+    } catch (error) {
+      return rejectWithValue(error?.message || "Could not fetch admin wallet");
+    }
+  }
+);
+
 const adminSlice = createSlice({
   name: "admin",
   initialState: {
@@ -50,7 +66,16 @@ const adminSlice = createSlice({
     leaderboard: [],
     usersStatus: "idle",
     leaderboardStatus: "idle",
+    walletStatus: "idle",
     socketStatus: "disconnected",
+    adminWallet: {
+      address: "",
+      trxBalance: 0,
+      trxLockedBalance: 0,
+      trxBalanceSun: 0,
+      trxLockedBalanceSun: 0,
+      currency: "TRX",
+    },
     currentRound: null,
     timer: {
       remaining: 0,
@@ -130,7 +155,16 @@ const adminSlice = createSlice({
       state.leaderboard = [];
       state.usersStatus = "idle";
       state.leaderboardStatus = "idle";
+      state.walletStatus = "idle";
       state.socketStatus = "disconnected";
+      state.adminWallet = {
+        address: "",
+        trxBalance: 0,
+        trxLockedBalance: 0,
+        trxBalanceSun: 0,
+        trxLockedBalanceSun: 0,
+        currency: "TRX",
+      };
       state.currentRound = null;
       state.timer = {
         remaining: 0,
@@ -170,6 +204,17 @@ const adminSlice = createSlice({
       })
       .addCase(fetchLeaderboard.rejected, (state, action) => {
         state.leaderboardStatus = "failed";
+        state.socketError = action.payload;
+      })
+      .addCase(fetchAdminWallet.pending, (state) => {
+        state.walletStatus = "loading";
+      })
+      .addCase(fetchAdminWallet.fulfilled, (state, action) => {
+        state.walletStatus = "succeeded";
+        state.adminWallet = action.payload || state.adminWallet;
+      })
+      .addCase(fetchAdminWallet.rejected, (state, action) => {
+        state.walletStatus = "failed";
         state.socketError = action.payload;
       });
   },

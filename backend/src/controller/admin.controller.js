@@ -116,3 +116,36 @@ export const getLeaderboard = AsyncHandler(async (req, res) => {
     new ApiResponse(200, leaderboard, "Leaderboard fetched successfully")
   );
 });
+
+/**
+ * @desc    Get admin wallet summary
+ * @route   GET /api/v1/admin/wallet
+ */
+export const getAdminWalletSummary = AsyncHandler(async (req, res) => {
+  if (req.user.role !== "admin") {
+    throw new ApiError(401, "Unauthorized to get this data");
+  }
+
+  const adminWallet = await Wallet.findOne({ isAdmin: true }).select(
+    "address trxBalanceSun trxLockedBalanceSun isAdmin"
+  );
+
+  if (!adminWallet) {
+    throw new ApiError(404, "Admin wallet not found");
+  }
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        address: adminWallet.address,
+        trxBalanceSun: adminWallet.trxBalanceSun || 0,
+        trxLockedBalanceSun: adminWallet.trxLockedBalanceSun || 0,
+        trxBalance: adminWallet.trxBalance || 0,
+        trxLockedBalance: adminWallet.trxLockedBalance || 0,
+        currency: "TRX",
+      },
+      "Admin wallet fetched successfully"
+    )
+  );
+});

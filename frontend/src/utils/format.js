@@ -11,6 +11,12 @@ export const compactNumber = (value) =>
     maximumFractionDigits: 1,
   }).format(Number(value || 0));
 
+export const formatTrx = (value) =>
+  `${new Intl.NumberFormat("en-IN", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 6,
+  }).format(Number(value || 0))} TRX`;
+
 export const formatDateTime = (value) => {
   if (!value) {
     return "--";

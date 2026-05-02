@@ -4,6 +4,7 @@ import { useAppDispatch, useAppSelector } from "../app/hooks";
 import {
   addAdminNotice,
   applyAdminBetUpdate,
+  fetchAdminWallet,
   fetchLeaderboard,
   fetchPlatformUsers,
   setPlayerCount,
@@ -23,6 +24,7 @@ export default function AdminLayout() {
   useEffect(() => {
     dispatch(fetchPlatformUsers());
     dispatch(fetchLeaderboard());
+    dispatch(fetchAdminWallet());
   }, [dispatch]);
 
   useEffect(() => {

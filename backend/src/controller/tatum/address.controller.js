@@ -4,7 +4,6 @@ import { AsyncHandler } from "../../util/AsyncHandler.util.js";
 import { ApiError } from "../../util/ApiError.util.js";
 import { ApiResponse } from "../../util/ApiResponse.util.js";
 import { tatumClient } from "./client.controller.js";
-import { encrypt } from "../../util/EncryptDecrypt.util.js";
 import { createDepositWebhookSubscription } from "../../service/tatumSubscription.service.js";
 
 // ======== Create User Wallet (1) ========
@@ -53,7 +52,7 @@ export const UserWallet = AsyncHandler(async (req, res) => {
     address,
     depositSubscriptionId,
     xpub,
-    mnemonic: encrypt(mnemonic),
+    mnemonic,
     index: 0,
     isAdmin: isAdmin,
   });

@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { decrypt, encrypt } from "../util/EncryptDecrypt.util.js";
 
 const SUN_PER_TRX = 1_000_000;
 
@@ -14,6 +15,9 @@ const assertPositiveSunAmount = (amount, label) => {
 
   return sun;
 };
+
+const isEncryptedMnemonicValue = (value) =>
+  typeof value === "string" && /^[0-9a-f]+:[0-9a-f]+$/i.test(value);
 
 const walletSchema = new mongoose.Schema(
   {
@@ -61,6 +65,20 @@ const walletSchema = new mongoose.Schema(
     mnemonic: {
       type: String,
       default: null,
+      set: (value) => {
+        if (!value) {
+          return null;
+        }
+
+        return isEncryptedMnemonicValue(value) ? value : encrypt(value);
+      },
+      get: (value) => {
+        if (!value) {
+          return null;
+        }
+
+        return isEncryptedMnemonicValue(value) ? decrypt(value) : value;
+      },
     },
     index: {
       type: Number,
@@ -87,8 +105,26 @@ const walletSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-    toJSON: { virtuals: true },
-    toObject: { virtuals: true },
+    toJSON: {
+      virtuals: true,
+      getters: false,
+      transform: (_doc, ret) => {
+        // Security: mnemonic must never be exposed in API JSON responses,
+        // even though it stays encrypted in the database for signer use.
+        delete ret.mnemonic;
+        return ret;
+      },
+    },
+    toObject: {
+      virtuals: true,
+      getters: false,
+      transform: (_doc, ret) => {
+        // Security: strip mnemonic from serialized objects so logs/responses
+        // cannot leak wallet seed material.
+        delete ret.mnemonic;
+        return ret;
+      },
+    },
   }
 );
 

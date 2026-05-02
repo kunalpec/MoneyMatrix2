@@ -19,7 +19,8 @@
     "webhooks:tatum-admin-refresh": "node src/scripts/refreshAdminWebhookSubscription.js",
     "kms:admin": "node src/scripts/configureAdminKms.js",
     "admin:wallet": "node src/scripts/ensureAdminWallet.js",
-    "payments:check": "node src/scripts/checkPaymentReadiness.js"
+    "payments:check": "node src/scripts/checkPaymentReadiness.js",
+    "reconcile:withdrawals": "node src/scripts/reconcileStuckWithdrawals.js"
   },
   "keywords": [],
   "author": "",

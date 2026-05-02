@@ -4,8 +4,8 @@ This file is meant for frontend developers who need to integrate with the MoneyM
 
 ## Base URLs
 
-- Local backend: `http://localhost:5000`
-- API base: `http://localhost:5000/api/v1`
+- Local backend: `http://localhost:8000`
+- API base: `http://localhost:8000/api/v1`
 
 ## Health Check
 
@@ -675,7 +675,7 @@ Cookie-based:
 import axios from "axios";
 
 export const api = axios.create({
-  baseURL: "http://localhost:5000/api/v1",
+  baseURL: "http://localhost:8000/api/v1",
   withCredentials: true,
 });
 ```
@@ -686,7 +686,7 @@ Bearer token-based:
 import axios from "axios";
 
 export const api = axios.create({
-  baseURL: "http://localhost:5000/api/v1",
+  baseURL: "http://localhost:8000/api/v1",
 });
 
 export const setAccessToken = (token) => {

@@ -3,11 +3,26 @@ import { useEffect, useState } from "react";
 import SectionCard from "../components/SectionCard";
 import StatCard from "../components/StatCard";
 import StatusBadge from "../components/StatusBadge";
-import { compactNumber, currency, formatCountdown, formatDateTime } from "../utils/format";
+import {
+  compactNumber,
+  currency,
+  formatCountdown,
+  formatDateTime,
+  formatTrx,
+} from "../utils/format";
 
 export default function DashboardPage() {
-  const { totalUsers, livePlayers, liveTotals, currentRound, notices, socketError, timer } =
-    useAppSelector((state) => state.admin);
+  const {
+    totalUsers,
+    livePlayers,
+    liveTotals,
+    currentRound,
+    notices,
+    socketError,
+    timer,
+    adminWallet,
+    walletStatus,
+  } = useAppSelector((state) => state.admin);
   const leaderboard = useAppSelector((state) => state.admin.leaderboard);
 
   const [timerProgress, setTimerProgress] = useState(0);
@@ -81,6 +96,35 @@ export default function DashboardPage() {
           </div>
         </div>
       </section>
+
+      <SectionCard
+        title="Admin wallet"
+        description="Treasury wallet address and crypto amount currently stored for the admin wallet."
+        actions={
+          <StatusBadge tone={walletStatus === "failed" ? "danger" : "neutral"}>
+            {walletStatus}
+          </StatusBadge>
+        }
+      >
+        <div className="detail-grid wallet-detail-grid">
+          <div className="wallet-address-block">
+            <span>Wallet address</span>
+            <strong>{adminWallet?.address || "--"}</strong>
+          </div>
+          <div>
+            <span>Crypto balance</span>
+            <strong>{formatTrx(adminWallet?.trxBalance)}</strong>
+          </div>
+          <div>
+            <span>Locked balance</span>
+            <strong>{formatTrx(adminWallet?.trxLockedBalance)}</strong>
+          </div>
+          <div>
+            <span>Currency</span>
+            <strong>{adminWallet?.currency || "TRX"}</strong>
+          </div>
+        </div>
+      </SectionCard>
 
       <div className="stats-grid">
         <StatCard accent="cyan" hint="All registered players" label="Users" value={compactNumber(totalUsers)} />

@@ -1,7 +1,6 @@
-{
-  "signatureId": "aa43fa62-3873-429b-84c5-c271538a00c0",
-  "xpub": "xpub6DycnprcwHt2dhrnk6VFMQWSDgvKerE7E5ccnU2iR3utJfpDAXNeotiCzx4g2KV4qercGycJRijXXAybmAhT1Gmd4R2d1pwnm7DWwMcrMGo" 
-}
+
+----------------------------------------------------------
+Forgetting the TATUM signatureId
 
 docker run --rm `
 >>   -e TATUM_API_KEY=t-69c26a31564f048dcf4dd20b-fe8d76bd0bec41c7af7f4bb7 ` 
@@ -11,7 +10,14 @@ docker run --rm `
 
 docker exec -it tatum-kms tatum-kms generatemanagedwallet TRON
 
+{
+  "signatureId": "aa43fa62-3873-429b-84c5-c271538a00c0",
+  "xpub": "xpub6DycnprcwHt2dhrnk6VFMQWSDgvKerE7E5ccnU2iR3utJfpDAXNeotiCzx4g2KV4qercGycJRijXXAybmAhT1Gmd4R2d1pwnm7DWwMcrMGo" 
+}
 
+-----------------------------------------------------------
+
+-----------------------------------------------------------
 // registe tatum webhook
 
 curl -X POST "https://api.tatum.io/v4/subscription" `
@@ -26,7 +32,7 @@ curl -X POST "https://api.tatum.io/v4/subscription" `
     },
     "secret": "d0ce2d892bf8824d931d1dad0c4c654afdc0d0b1803a9d6a4e8e0cb7e4092e6a"
   }'
-
+------------------------------------------------------------
 
 C:\Users\DELL\Desktop\moneyMatrix2\backend>npm run payments:check     
 
@@ -67,13 +73,467 @@ MongoDB Connected: ac-htdgxwr-shard-00-00.kv5gcsy.mongodb.net
     "adminHasPositiveChainBalance": false
   }
 }
+## 🚀 Deployment Guide
+## 1. Frontend Deployment (Vercel)
 
+
+* Run locally:
+
+
+* npm run dev
+* npm run build
+* Push your code to GitHub
+* Go to Vercel and import your project
+* Deploy the frontend
+* After deployment, you will get a live URL:
+* https://your-app.vercel.app
+* add the moneymatrixapp.com live domain to this ok 
+* add the live correct backend url to this frontend ok 
+*
+
+for the backed 
+we use express run on 8000
+use docker 
+and 
+Documentation
+kunal
+﻿
+
+POSTRegister
+
+http://localhost:8000/api/v1/users/register
+﻿
+
+Bodyraw (json)
+json
+{
+    "name":"jasleenkaur",
+    "email":"jasleenkaurjandoria@gmail.com",
+    "password":"12345678",
+    "phone":"+919878497680"
+}
+POSTverify-otp
+
+http://localhost:8000/api/v1/users/verify-otp
+﻿
+
+Bodyraw (json)
+json
+{
+    "phone":"+919781991761",
+    "otp":"197473"
+}
+POSTlogin
+
+http://localhost:8000/api/v1/users/login
+﻿
+
+Bodyraw (json)
+json
+{
+    "phone":"+919878497680",
+    "password":"12345678"
+}
+POSTwallet-form
+
+http://localhost:8000/api/v1/wallet
+﻿
+
+POSTon-ramp
+
+http://localhost:8000/api/v1/ramp/on-ramp
+﻿
+
+Request Headers
+Cache-Control
+no-cache
+Postman-Token
+<calculated when request is sent>
+Content-Type
+application/json
+Content-Length
+<calculated when request is sent>
+Host
+<calculated when request is sent>
+User-Agent
+PostmanRuntime/7.39.1
+Accept
+*/*
+Accept-Encoding
+gzip, deflate, br
+Connection
+keep-alive
+token
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI2OWUxZmE0NTJkMzc5NTg2YWYyNjQxMjMiLCJyb2xlIjoidXNlciIsImlhdCI6MTc3Njc2ODI3NSwiZXhwIjoxNzc2NzY5MTc1fQ.nAS-4PsnbizA6P4A3ZcpkXbQHbvqt5lHI5ieUttBKUg
+Bodyraw (json)
+json
+{
+  "fiatAmount": 100,
+  "countryCode": "US",
+  "fiatCurrency": "USD",
+  "cryptoCurrencyCode": "TRX"
+}
+
+POSTtransak/jwt-token
+
+http://localhost:8000/api/v1/transak/jwt-token
+﻿
+
+Bodyraw (json)
+json
+{
+  "eventId": "ORDER_COMPLETED",
+  "orderId": "4bd5c097-8fea-41d6-8442-08b519242ee2",
+  "status": "COMPLETED",
+  "cryptoAmount": "100.0",
+  "cryptoCurrency": "TRX",
+  "walletAddress": "TJv25FCA2bwLeJHs8op1duVkWkucGyswPF",
+  "fiatAmount": 100,
+  "fiatCurrency": "USD",
+  "countryCode": "US"
+}
+POSTwebhook/transak
+
+http://localhost:8000/api/v1/webhook/transak
+﻿
+
+Request Headers
+Cookie
+accessToken=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI2OWUxZmE0NTJkMzc5NTg2YWYyNjQxMjMiLCJyb2xlIjoidXNlciIsImlhdCI6MTc3NjY3NTg0NSwiZXhwIjoxNzc2Njc2NzQ1fQ.Cvi6OjpZNkWX1scXDo0OkJsoF5GK-HEYDnOibHQoERg; refreshToken=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI2OWUxZmE0NTJkMzc5NTg2YWYyNjQxMjMiLCJpYXQiOjE3NzY2NzU4NDUsImV4cCI6MTc3NzI4MDY0NX0.ZlAIRG_XjHug2yjWdLV80pXnntnhfXrWzFjPAAjKb8g
+Cache-Control
+no-cache
+Postman-Token
+<calculated when request is sent>
+Content-Type
+application/json
+Content-Length
+<calculated when request is sent>
+Host
+<calculated when request is sent>
+User-Agent
+PostmanRuntime/7.39.1
+Accept
+*/*
+Accept-Encoding
+gzip, deflate, br
+Connection
+keep-alive
+x-transak-signature
+7d5f9fae93029fb3be577a70a344d54f20d275f0acaa06de45a56ddaac75d74e
+Bodyraw (json)
+View More
+json
+ {
+        "data": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJldmVudElkIjoiT1JERVJfQ09NUExFVEVEIiwib3JkZXJJZCI6IjRiZDVjMDk3LThmZWEtNDFkNi04NDQyLTA4YjUxOTI0MmVlMiIsInN0YXR1cyI6IkNPTVBMRVRFRCIsImNyeXB0b0Ftb3VudCI6IjEwMC4wIiwiY3J5cHRvQ3VycmVuY3kiOiJUUlgiLCJ3YWxsZXRBZGRyZXNzIjoiVEp2MjVGQ0EyYndMZUpIczhvcDFkdVZrV2t1Y0d5c3dQRiIsImZpYXRBbW91bnQiOjEwMCwiZmlhdEN1cnJlbmN5IjoiVVNEIiwiY291bnRyeUNvZGUiOiJVUyIsImV2ZW50SUQiOiJPUkRFUl9DT01QTEVURUQiLCJ3ZWJob29rRGF0YSI6eyJldmVudElkIjoiT1JERVJfQ09NUExFVEVEIiwib3JkZXJJZCI6IjRiZDVjMDk3LThmZWEtNDFkNi04NDQyLTA4YjUxOTI0MmVlMiIsInN0YXR1cyI6IkNPTVBMRVRFRCIsImNyeXB0b0Ftb3VudCI6IjEwMC4wIiwiY3J5cHRvQ3VycmVuY3kiOiJUUlgiLCJ3YWxsZXRBZGRyZXNzIjoiVEp2MjVGQ0EyYndMZUpIczhvcDFkdVZrV2t1Y0d5c3dQRiIsImZpYXRBbW91bnQiOjEwMCwiZmlhdEN1cnJlbmN5IjoiVVNEIiwiY291bnRyeUNvZGUiOiJVUyIsImlkIjoiNGJkNWMwOTctOGZlYS00MWQ2LTg0NDItMDhiNTE5MjQyZWUyIn0sImlhdCI6MTc3NzI3NTY1NiwiZXhwIjoxNzc3Mjc5MjU2fQ.WTaCIUokvG09uss9sNPOkvOlhbDF1LbKmAh9oNTxQg0",
+        "eventID": "ORDER_COMPLETED",
+        "webhookData": {
+            "eventId": "ORDER_COMPLETED",
+            "orderId": "4bd5c097-8fea-41d6-8442-08b519242ee2",
+            "status": "COMPLETED",
+            "cryptoAmount": "100.0",
+            "cryptoCurrency": "TRX",
+            "walletAddress": "TJv25FCA2bwLeJHs8op1duVkWkucGyswPF",
+            "fiatAmount": 100,
+            "fiatCurrency": "USD",
+            "countryCode": "US",
+            "id": "4bd5c097-8fea-41d6-8442-08b519242ee2"
+        }
+    }
+POSTwebhook/tatum
+
+http://localhost:8000/api/v1/webhook/tatum/address
+﻿
+
+Request Headers
+Cookie
+accessToken=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI2OWViNGM4Zjg2NTRhZTE2ZWVkYjEzOTYiLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NzcyODQ2OTcsImV4cCI6MTc3NzI4NTU5N30.PIJD_bkE6D28chk8ae0UlnHye8EYczbU0QzRQF1J9U4; refreshToken=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI2OWViNGM4Zjg2NTRhZTE2ZWVkYjEzOTYiLCJpYXQiOjE3NzcyODQ2OTcsImV4cCI6MTc3Nzg4OTQ5N30.7aAl9SfbuuvSdBIOM2Kb2GtRIjBdNar6O3tQmVo-yjs
+Cache-Control
+no-cache
+Postman-Token
+<calculated when request is sent>
+Content-Type
+application/json
+Content-Length
+<calculated when request is sent>
+Host
+<calculated when request is sent>
+User-Agent
+PostmanRuntime/7.39.1
+Accept
+*/*
+Accept-Encoding
+gzip, deflate, br
+Connection
+keep-alive
+x-payload-hash
+cGnr1QXuwvFLVIR6z5ujYqqLd3dg8sZAm+z/ueicIp5f+HYd2SjlwYyO5ROazvS5xw83SOaUXyD3dhakq6Ppzw==
+Content-Type
+application/json
+Bodyraw (json)
+json
+{
+  "currency": "TRON",
+  "address": "TJv25FCA2bwLeJHs8op1duVkWkucGyswPF",
+  "blockNumber": 651631,
+  "counterAddress": "TJv25FCA2bwLeJHs8op1duVkWkucGyswPF",
+  "txId": "27c8f9a1b2c3d4e5f6789012345678901234567890abcdef",
+  "chain": "tron-mainnet",
+  "subscriptionType": "INCOMING_NATIVE_TX",
+  "amount": "0.000241500000147"
+}
+
+POSTtatum/hash
+
+http://localhost:8000/api/v1/webhook/tatum/hmac
+﻿
+
+Bodyraw (json)
+json
+{
+  "currency": "TRON",
+  "address": "TJv25FCA2bwLeJHs8op1duVkWkucGyswPF",
+  "blockNumber": 651631,
+  "counterAddress": "TJv25FCA2bwLeJHs8op1duVkWkucGyswPF",
+  "txId": "27c8f9a1b2c3d4e5f6789012345678901234567890abcdef",
+  "chain": "tron-mainnet",
+  "subscriptionType": "INCOMING_NATIVE_TX",
+  "amount": "0.000241500000147"
+}
+GET/wallet/info
+
+http://localhost:8000/api/v1/wallet/info
+﻿
+
+POSTramp/withdraw-tatum
+
+http://localhost:8000/api/v1/ramp/withdraw
+﻿
+
+Bodyraw (json)
+json
+{
+  "amount": 25
+}
+
+POSToff-ramp
+
+http://localhost:8000/api/v1/ramp/off-ramp
+﻿
+
+Bodyraw (json)
+json
+{
+  "amount": 100,
+  "fiatCurrency": "USD",
+  "countryCode": "US",
+  "cryptoCurrencyCode": "TRX"
+}
+POSTregister webhook
+
+http://localhost:8000/api/v1/webhook/tatum/register-webhook
+﻿
+
+DELETEapi.tatum.io/v4/subscription
+
+https://api.tatum.io/v4/subscription/69ec9241241ed512bceaff07
+﻿
+
+Request Headers
+Cache-Control
+no-cache
+Postman-Token
+<calculated when request is sent>
+Host
+<calculated when request is sent>
+User-Agent
+PostmanRuntime/7.39.1
+Accept
+*/*
+Accept-Encoding
+gzip, deflate, br
+Connection
+keep-alive
+x-api-key
+t-69c26a31564f048dcf4dd20b-fe8d76bd0bec41c7af7f4bb7 use this all postman routes ok and 
+use 
+########################################
+# SERVER
+########################################
+PORT=8000
+NODE_ENV=development 
+
+
+########################################
+# DATABASE
+########################################
+MONGO_URI=mongodb+srv://kunal:kunal1234@cluster0.kv5gcsy.mongodb.net/crypto-game
+
+
+########################################
+# AUTH
+########################################
+ACCESS_TOKEN_SECRET=79d9a09821833bb08043b2dbe7288368424153a9035826382c85307a7d80773b
+ACCESS_TOKEN_EXPIRE=15m
+REFRESH_TOKEN_SECRET=8ea517cc1a6634c2c0a3127eaaafc7752be32a3b15af9da42c62f3f7429d8ab1
+REFRESH_TOKEN_EXPIRE=7d
+
+
+########################################
+# CORS
+########################################
+CORS_ORIGINS=https://moneymatrixapp.com,https://www.moneymatrixapp.com
+
+
+########################################
+# TATUM Dev
+########################################
+TATUM_API_KEY=t-69c26a31564f048dcf4dd20b-fe8d76bd0bec41c7af7f4bb7
+TATUM_WEBHOOK_HMAC_SECRET=8e1a6ca3738090b6bfb684fde04d0bf35a5e17d80fcc686ebf587ce9b22424bf
+TATUM_TRON_ADMIN_ADDRESS=TJv25FCA2bwLeJHs8op1duVkWkucGyswPF
+TATUM_TRON_ADMIN_SIGNATURE_ID=aa43fa62-3873-429b-84c5-c271538a00c0
+TATUM_TRON_ADMIN_SIGNER_REF=admin-tron-wallet
+CHAIN=tron-testnet
+########################################
+# TRON TRANSFER MODE
+########################################
+TATUM_TRON_TRANSFER_MODE=TRX
+TATUM_TRON_TRC20_TOKEN_ADDRESS=TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t
+
+
+########################################
+# ENCRYPTION
+########################################
+MENEMONIC_ENCRYPTION_KEY=8ea517cc1a6634c2c0a3127eaaafc7752be32a3b15af9da42c62f3f7429d8ab1
+
+
+########################################
+# PUBLIC URLS
+########################################
+# PUBLIC_WEBHOOK_BASE_URL=https://api.moneymatrixapp.com
+# BACKEND_PUBLIC_URL=https://api.moneymatrixapp.com
+
+
+PUBLIC_WEBHOOK_BASE_URL=https://delphia-synostotic-fletcher.ngrok-free.dev
+BACKEND_PUBLIC_URL=https://delphia-synostotic-fletcher.ngrok-free.dev
+
+
+########################################
+# TRANSAK Dev
+########################################
+TRANSAK_API_KEY=465b1f9d-5018-450d-bffd-37781b95d617
+TRANSAK_API_SECRET=GUnJaeml+37JY1lKSASEyg==
+TRANSAK_ACCESS_TOKEN=
+TRANSAK_HOST_URL=https://moneymatrixapp.com
+TRANSAK_REFERRER_DOMAIN=moneymatrixapp.com
+
+
+########################################
+# REDIS
+########################################
+REDIS_URL=redis://127.0.0.1:6379
+
+
+########################################
+# BLOCKCHAIN SETTINGS
+########################################
+TRON_FEE=1
+MIN_TRON_CONFIRMATIONS=0
+
+
+########################################
+# JOB / QUEUE CONFIG
+########################################
+WEBHOOK_MAX_RETRIES=5
+DEPOSIT_POLL_INTERVAL_MS=120000
+DEPOSIT_POLL_BATCH_SIZE=25
+WITHDRAWAL_JOB_ATTEMPTS=5
+WITHDRAWAL_JOB_BACKOFF_MS=5000
+WITHDRAWAL_WORKER_CONCURRENCY=1
+
+
+########################################
+# OPTIONAL ADMIN WALLET MAPPING
+########################################
+ADMIN_WALLET_USER_ID=69eb4c8f8654ae16eedb1396
+ADMIN_WALLET_USER_EMAIL=kunalcode23106052@gmail.com
+ADMIN_WALLET_USER_PHONE=+919592951721
+
+
+########################################
+# ADMIN SIGNUP
+########################################
+ADMIN_SIGNUP_KEY=4058a9dc89d21558e7bddf19f467a2192224dfe22726bb34173fa0c924172bfd
+
+
+########################################
+# TWILIO (OPTIONAL)
+########################################
+TWILIO_ACCOUNT_SID=
+TWILIO_AUTH_TOKEN=
+TWILIO_PHONE_NUMBER=
+
+
+########################################
+# EMAIL
+########################################
+EMAIL_USER=kunalcode23106052@gmail.com
+EMAIL_PASS=aruf kqft xaws eugm
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_SECURE=false
+EMAIL_ALLOW_INVALID_TLS=true
+ this .env ok 
+
+please use the crypto 256 bit code ok in some places ok 
+
+please the docker redis ok comment to run docker redis container 
+
+----------------------------------------------------------
+Forgetting the TATUM signatureId
+
+docker run --rm `
+>>   -e TATUM_API_KEY=t-69c26a31564f048dcf4dd20b-fe8d76bd0bec41c7af7f4bb7 ` 
+>>   -e TATUM_KMS_PASSWORD=kunal@123 `
+>>   -v C:\\Users\\DELL\\Desktop\\moneyMatrix2\\backend\\.tatumrc:/root/.tatumrc `
+>>   tatumio/tatum-kms generatemanagedwallet TRON
+
+docker exec -it tatum-kms tatum-kms generatemanagedwallet TRON
+
+{
+  "signatureId": "aa43fa62-3873-429b-84c5-c271538a00c0",
+  "xpub": "xpub6DycnprcwHt2dhrnk6VFMQWSDgvKerE7E5ccnU2iR3utJfpDAXNeotiCzx4g2KV4qercGycJRijXXAybmAhT1Gmd4R2d1pwnm7DWwMcrMGo" 
+}
+
+-----------------------------------------------------------
+
+-----------------------------------------------------------
+// registe tatum webhook
+
+curl -X POST "https://api.tatum.io/v4/subscription" `
+  -H "Content-Type: application/json" `
+  -H "x-api-key: t-69c26a31564f048dcf4dd20b-6cdd1e9bf928477d834021b7" `
+  -d '{
+    "type": "ADDRESS_TRANSACTION",
+    "attr": {
+      "address": "TDNRjEdj9uueCVnFxaVuhvzQYREJ1Yv5GU",
+      "chain": "TRX",
+      "url": "https://delphia-synostotic-fletcher.ngrok-free.dev/api/v1/webhook/tatum/address"
+    },
+    "secret": "d0ce2d892bf8824d931d1dad0c4c654afdc0d0b1803a9d6a4e8e0cb7e4092e6a"
+  }'
+------------------------------------------------------------
+please ru tis these above code in docker t get the signatureId ok 
+
+please make the readme.md file for deployemtn from start to end ok 
+and where we need to deployemtn ok 
+how to connecyt apis
+and How to test the apis ok ok from 0 to hero ok professional documentcation 
 C:\Users\DELL\Desktop\moneyMatrix2\backend>
 
 {"success":true,"message":"Webhook registered successfully","data":{"id":"69ec94a608e1905919d15395"}}
 
 
-
+------------------------------------------------------------
 npm run webhooks:tatum-admin-refresh
 {
 "success": true,
@@ -84,6 +544,8 @@ npm run webhooks:tatum-admin-refresh
 "subscriptionType": "INCOMING_NATIVE_TX",
 "chain": "TRON"
 }
+----------------------------------------------------------------
+
 
 C:\Users\DELL\Desktop\moneyMatrix2\backend>npm run admin:wallet                            
 
@@ -114,6 +576,7 @@ MongoDB Connected: ac-htdgxwr-shard-00-00.kv5gcsy.mongodb.net
   amount: '0.000241500000147'
 }
 
+-------------------------------------------------------------------------------------
 
 # TATUM (HMAC verified)
 curl -X POST "https://delphia-synostotic-fletcher.ngrok-free.dev/api/v1/webhook/tatum/address" \
@@ -184,7 +647,7 @@ db.transactions.createIndex({"txId":1, "type":1})
 #    - Transak → transactions (PENDING)
 #    - Tatum → transactions (PROCESSING → SUCCESS) do this ok remove the useless model 2 models
 
-
+---------------------------------------------------------------------------------------
 {
   "_id": {
     "$oid": "69ef6689dc0664b9fc57a11f"
@@ -246,3 +709,4 @@ db.transactions.createIndex({"txId":1, "type":1})
   },
   "txId": "a1b2c3d4e5f6789012345678901234567890abcdef12"
 }
+----------------------------------------------------------------------------------------

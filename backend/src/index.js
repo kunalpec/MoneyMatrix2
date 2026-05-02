@@ -7,6 +7,10 @@ import http from "http";
 import { StartIoServer } from "./socket/index.js";
 import { gameEngine } from "./service/gameEngine.service.js";
 import { startWithdrawalWorker } from "./queue/withdrawal.queue.js";
+import {
+  scheduleWithdrawalReconciliationJob,
+  startWithdrawalReconciliationWorker,
+} from "./queue/reconciliation.queue.js";
 import { startDepositMonitor } from "./service/depositMonitor.service.js";
 import { logger } from "./util/logger.js";
 import validateEnvironment from "./scripts/validateEnvironment.js";
@@ -71,6 +75,8 @@ const startServer = async () => {
     gameEngine.init();
     gameEngine.startGame();
     startWithdrawalWorker();
+    startWithdrawalReconciliationWorker();
+    await scheduleWithdrawalReconciliationJob();
     startDepositMonitor();
 
     // 6. Start listening
